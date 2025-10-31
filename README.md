@@ -9,14 +9,9 @@ Sistema para gestionar reservas de salas de estudio en la UCU. Esta es la primer
 
 # Estructura de Carpetas
 
-obligatorioBD/
-├── sql/
-│   └── database_setup.sql
-├── backend/
-│   └── sistema_salas_completo.py
-└── README.md
 
-## Requisitos
+
+# Requisitos
 
 - Python 3.x
 - MySQL
@@ -55,9 +50,14 @@ El sistema usa tablas para:
 - MySQL
 - PyMySQL para conectar Python con MySQL
 
-# Proximos pasos
+# Proximo pasos
 
 En la siguiente entrega se agregara la funcionalidad completa de reservas y front basico.
 
-# Autor
+# Autores
 Maria Gomez, Santiago Tarigo, Francisco Von Sanden
+
+
+
+
+
