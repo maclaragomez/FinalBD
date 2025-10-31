@@ -1,0 +1,384 @@
+import pymysql
+from pymysql import Error
+import datetime
+
+
+class SistemaSalas:
+    def __init__(self):
+        self.host = 'localhost'
+        self.user = 'root'
+        self.password = 'root'
+        self.database = 'gestion_salas_estudio'
+
+    def get_connection(self):
+        try:
+            connection = pymysql.connect(
+                host=self.host,
+                user=self.user,
+                password=self.password,
+                database=self.database,
+                charset='utf8mb4',
+                cursorclass=pymysql.cursors.DictCursor
+            )
+            return connection
+        except Error as e:
+            print(f"Error de conexión: {e}")
+            return None
+
+    def probar_conexion(self):
+        """Probar conexión y mostrar tablas"""
+        print("Probando conexión a la base de datos...")
+        conn = self.get_connection()
+        if conn:
+            try:
+                with conn.cursor() as cursor:
+                    cursor.execute("SHOW TABLES")
+                    tablas = cursor.fetchall()
+                    print(f"Conexión exitosa! Tablas encontradas: {len(tablas)}")
+                    for tabla in tablas:
+                        print(f"   - {list(tabla.values())[0]}")
+                return True
+            except Error as e:
+                print(f"Error: {e}")
+                return False
+            finally:
+                conn.close()
+        return False
+
+
+
+    def alta_participante(self):
+        """Agregar nuevo participante"""
+        print("\n--- ALTA DE PARTICIPANTE ---")
+        ci = input("Cédula: ")
+        nombre = input("Nombre: ")
+        apellido = input("Apellido: ")
+        email = input("Email: ")
+
+        conn = self.get_connection()
+        if not conn:
+            return
+
+        try:
+            with conn.cursor() as cursor:
+                sql = "INSERT INTO participante (ci, nombre, apellido, email) VALUES (%s, %s, %s, %s)"
+                cursor.execute(sql, (ci, nombre, apellido, email))
+                conn.commit()
+                print("✅ Participante agregado exitosamente!")
+        except Error as e:
+            print(f"Error: {e}")
+        finally:
+            conn.close()
+
+    def baja_participante(self):
+        """Eliminar participante"""
+        print("\n--- BAJA DE PARTICIPANTE ---")
+        ci = input("Cédula del participante a eliminar: ")
+
+        conn = self.get_connection()
+        if not conn:
+            return
+
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT * FROM participante WHERE ci = %s", (ci,))
+                participante = cursor.fetchone()
+
+                if participante:
+                    sql = "DELETE FROM participante WHERE ci = %s"
+                    cursor.execute(sql, (ci,))
+                    conn.commit()
+                    print("Participante eliminado exitosamente!")
+                else:
+                    print("No se encontró participante con esa cédula")
+        except Error as e:
+            print(f"Error: {e}")
+        finally:
+            conn.close()
+
+    def modificacion_participante(self):
+        """Modificar datos de participante"""
+        print("\n--- MODIFICACIÓN DE PARTICIPANTE ---")
+        ci = input("Cédula del participante a modificar: ")
+
+        conn = self.get_connection()
+        if not conn:
+            return
+
+        try:
+            with conn.cursor() as cursor:
+
+                cursor.execute("SELECT * FROM participante WHERE ci = %s", (ci,))
+                participante = cursor.fetchone()
+
+                if not participante:
+                    print("No se encontró participante con esa cédula")
+                    return
+
+                print(f"\nDatos actuales:")
+                print(f"Nombre: {participante['nombre']}")
+                print(f"Apellido: {participante['apellido']}")
+                print(f"Email: {participante['email']}")
+
+                print("\nIngrese nuevos datos (dejar vacío para no cambiar):")
+                nuevo_nombre = input("Nuevo nombre: ") or participante['nombre']
+                nuevo_apellido = input("Nuevo apellido: ") or participante['apellido']
+                nuevo_email = input("Nuevo email: ") or participante['email']
+
+                sql = """UPDATE participante 
+                         SET nombre = %s, apellido = %s, email = %s 
+                         WHERE ci = %s"""
+                cursor.execute(sql, (nuevo_nombre, nuevo_apellido, nuevo_email, ci))
+                conn.commit()
+                print("Participante actualizado exitosamente!")
+
+        except Error as e:
+            print(f"Error: {e}")
+        finally:
+            conn.close()
+
+    def listar_participantes(self):
+        """Listar todos los participantes"""
+        print("\n--- LISTA DE PARTICIPANTES ---")
+
+        conn = self.get_connection()
+        if not conn:
+            return
+
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    SELECT p.ci, p.nombre, p.apellido, p.email, 
+                           GROUP_CONCAT(CONCAT(ppa.nombre_programa, ' (', ppa.rol, ')') SEPARATOR ', ') as programas
+                    FROM participante p
+                    LEFT JOIN participante_programa_academico ppa ON p.ci = ppa.ci_participante
+                    GROUP BY p.ci
+                    ORDER BY p.apellido, p.nombre
+                """)
+                participantes = cursor.fetchall()
+
+                if not participantes:
+                    print("No hay participantes registrados")
+                    return
+
+                for part in participantes:
+                    print(f"\nCédula: {part['ci']}")
+                    print(f"Nombre: {part['nombre']} {part['apellido']}")
+                    print(f"Email: {part['email']}")
+                    print(f"Programas: {part['programas'] or 'Sin programa asignado'}")
+                    print("-" * 40)
+
+                print(f"\nTotal: {len(participantes)} participantes")
+
+        except Error as e:
+            print(f"Error: {e}")
+        finally:
+            conn.close()
+
+    def listar_salas(self):
+        """Listar todas las salas disponibles"""
+        print("\n--- SALAS DISPONIBLES ---")
+
+        conn = self.get_connection()
+        if not conn:
+            return
+
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    SELECT s.nombre_sala, s.edificio, s.capacidad, s.tipo_sala, e.direccion
+                    FROM sala s
+                    JOIN edificio e ON s.edificio = e.nombre_edificio
+                    ORDER BY s.edificio, s.nombre_sala
+                """)
+                salas = cursor.fetchall()
+
+                for sala in salas:
+                    print(f"\nSala: {sala['nombre_sala']}")
+                    print(f"Edificio: {sala['edificio']}")
+                    print(f"Capacidad: {sala['capacidad']} personas")
+                    print(f"Tipo: {sala['tipo_sala']}")
+                    print(f"Dirección: {sala['direccion']}")
+                    print("-" * 40)
+
+                print(f"\nTotal: {len(salas)} salas")
+
+        except Error as e:
+            print(f"Error: {e}")
+        finally:
+            conn.close()
+
+    # ========== REPORTES BÁSICOS ==========
+
+    def reporte_salas_populares(self):
+        """Mostrar salas más reservadas"""
+        print("\n--- SALAS MÁS RESERVADAS ---")
+
+        conn = self.get_connection()
+        if not conn:
+            return
+
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    SELECT r.nombre_sala, r.edificio, COUNT(*) as total_reservas
+                    FROM reserva r
+                    WHERE r.estado = 'activa'
+                    GROUP BY r.nombre_sala, r.edificio
+                    ORDER BY total_reservas DESC
+                    LIMIT 5
+                """)
+                salas = cursor.fetchall()
+
+                for i, sala in enumerate(salas, 1):
+                    print(f"{i}. {sala['nombre_sala']} ({sala['edificio']}): {sala['total_reservas']} reservas")
+
+        except Error as e:
+            print(f"Error: {e}")
+        finally:
+            conn.close()
+
+    def reporte_ocupacion_edificios(self):
+        """Mostrar porcentaje de ocupación por edificio"""
+        print("\n--- OCUPACIÓN POR EDIFICIO ---")
+
+        conn = self.get_connection()
+        if not conn:
+            return
+
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    SELECT e.nombre_edificio, 
+                           COUNT(r.id_reserva) as reservas_activas,
+                           COUNT(DISTINCT s.nombre_sala) as salas_totales,
+                           ROUND((COUNT(r.id_reserva) / (COUNT(DISTINCT s.nombre_sala) * 15 * 30)) * 100, 2) as porcentaje_ocupacion
+                    FROM edificio e
+                    LEFT JOIN sala s ON e.nombre_edificio = s.edificio
+                    LEFT JOIN reserva r ON s.nombre_sala = r.nombre_sala AND r.estado = 'activa'
+                    GROUP BY e.nombre_edificio
+                    ORDER BY porcentaje_ocupacion DESC
+                """)
+                edificios = cursor.fetchall()
+
+                for edificio in edificios:
+                    print(f"\n{edificio['nombre_edificio']}:")
+                    print(f"  Reservas activas: {edificio['reservas_activas']}")
+                    print(f"  Salas totales: {edificio['salas_totales']}")
+                    print(f"  Ocupación estimada: {edificio['porcentaje_ocupacion']}%")
+
+        except Error as e:
+            print(f"Error: {e}")
+        finally:
+            conn.close()
+
+    
+
+    def menu_principal(self):
+        """Menú principal del sistema"""
+        while True:
+            print("\n" + "=" * 60)
+            print("           SISTEMA DE GESTIÓN DE SALAS DE ESTUDIO - UCU")
+            print("=" * 60)
+            print("1. ABM de Participantes")
+            print("2. Consultas y Reportes")
+            print("3. Información del Sistema")
+            print("4. Salir")
+            print("-" * 60)
+
+            opcion = input("Seleccione una opción (1-4): ").strip()
+
+            if opcion == '1':
+                self.menu_participantes()
+            elif opcion == '2':
+                self.menu_reportes()
+            elif opcion == '3':
+                self.menu_informacion()
+            elif opcion == '4':
+                print("¡Gracias por usar el sistema! 👋")
+                break
+            else:
+                print("Opción no válida. Intente nuevamente.")
+
+    def menu_participantes(self):
+        """Menú de gestión de participantes"""
+        while True:
+            print("\n--- GESTIÓN DE PARTICIPANTES ---")
+            print("1. Alta de participante")
+            print("2. Baja de participante")
+            print("3. Modificación de participante")
+            print("4. Listar participantes")
+            print("5. Volver al menú principal")
+
+            opcion = input("Seleccione una opción (1-5): ").strip()
+
+            if opcion == '1':
+                self.alta_participante()
+            elif opcion == '2':
+                self.baja_participante()
+            elif opcion == '3':
+                self.modificacion_participante()
+            elif opcion == '4':
+                self.listar_participantes()
+            elif opcion == '5':
+                break
+            else:
+                print("Opción no válida.")
+
+    def menu_reportes(self):
+        """Menú de reportes"""
+        while True:
+            print("\n--- REPORTES Y CONSULTAS ---")
+            print("1. Listar salas disponibles")
+            print("2. Salas más reservadas")
+            print("3. Ocupación por edificio")
+            print("4. Volver al menú principal")
+
+            opcion = input("Seleccione una opción (1-4): ").strip()
+
+            if opcion == '1':
+                self.listar_salas()
+            elif opcion == '2':
+                self.reporte_salas_populares()
+            elif opcion == '3':
+                self.reporte_ocupacion_edificios()
+            elif opcion == '4':
+                break
+            else:
+                print("Opción no válida.")
+
+    def menu_informacion(self):
+        """Información del sistema"""
+        print("\n--- INFORMACIÓN DEL SISTEMA ---")
+        print("Sistema de Gestión de Salas de Estudio - UCU")
+        print("Base de Datos 1 - Segundo Semestre 2025")
+        print("\nFuncionalidades implementadas:")
+        print("ABM completo de participantes")
+        print("Listado de salas y edificios")
+        print("Reportes básicos de uso")
+        print("Conexión a base de datos MySQL")
+        print("\nTecnologías: Python, PyMySQL, MySQL")
+        input("\nPresione Enter para continuar...")
+
+
+def main():
+    """Función principal"""
+    print("INICIANDO SISTEMA DE GESTIÓN DE SALAS...")
+
+    sistema = SistemaSalas()
+
+
+    if sistema.probar_conexion():
+        print("\nSistema listo para usar!")
+        input("Presione Enter para continuar al menú principal...")
+        sistema.menu_principal()
+    else:
+        print("\nNo se pudo conectar a la base de datos.")
+        print("Por favor verifica:")
+        print("1. Que MySQL esté ejecutándose")
+        print("2. Que la contraseña en el código sea correcta")
+        print("3. Que la base de datos 'gestion_salas_estudio' exista")
+
+
+if __name__ == "__main__":
+    main()
