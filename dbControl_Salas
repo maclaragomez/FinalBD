@@ -1,0 +1,164 @@
+
+CREATE DATABASE IF NOT EXISTS gestion_salas_estudio;
+USE gestion_salas_estudio;
+
+
+CREATE TABLE facultad (
+    id_facultad INT AUTO_INCREMENT PRIMARY KEY,
+    nombre VARCHAR(100) NOT NULL UNIQUE
+);
+
+
+CREATE TABLE programa_academico (
+    nombre_programa VARCHAR(100) PRIMARY KEY,
+    id_facultad INT NOT NULL,
+    tipo ENUM('grado', 'posgrado') NOT NULL,
+    FOREIGN KEY (id_facultad) REFERENCES facultad(id_facultad) ON DELETE CASCADE
+);
+
+
+CREATE TABLE participante (
+    ci VARCHAR(20) PRIMARY KEY,
+    nombre VARCHAR(50) NOT NULL,
+    apellido VARCHAR(50) NOT NULL,
+    email VARCHAR(100) NOT NULL UNIQUE
+);
+
+
+CREATE TABLE participante_programa_academico (
+    id_alumno_programa INT AUTO_INCREMENT PRIMARY KEY,
+    ci_participante VARCHAR(20) NOT NULL,
+    nombre_programa VARCHAR(100) NOT NULL,
+    rol ENUM('alumno', 'docente') NOT NULL,
+    FOREIGN KEY (ci_participante) REFERENCES participante(ci) ON DELETE CASCADE,
+    FOREIGN KEY (nombre_programa) REFERENCES programa_academico(nombre_programa) ON DELETE CASCADE,
+    UNIQUE KEY unique_participante_programa (ci_participante, nombre_programa, rol)
+);
+
+
+CREATE TABLE edificio (
+    nombre_edificio VARCHAR(50) PRIMARY KEY,
+    direccion VARCHAR(200) NOT NULL,
+    departamento VARCHAR(50) NOT NULL
+);
+
+
+CREATE TABLE sala (
+    nombre_sala VARCHAR(50) PRIMARY KEY,
+    edificio VARCHAR(50) NOT NULL,
+    capacidad INT NOT NULL CHECK (capacidad > 0),
+    tipo_sala ENUM('libre', 'posgrado', 'docente') NOT NULL,
+    FOREIGN KEY (edificio) REFERENCES edificio(nombre_edificio) ON DELETE CASCADE
+);
+
+
+CREATE TABLE turno (
+    id_turno INT AUTO_INCREMENT PRIMARY KEY,
+    hora_inicio TIME NOT NULL UNIQUE,
+    hora_fin TIME NOT NULL UNIQUE,
+    CHECK (hora_inicio < hora_fin)
+);
+
+
+CREATE TABLE reserva (
+    id_reserva INT AUTO_INCREMENT PRIMARY KEY,
+    nombre_sala VARCHAR(50) NOT NULL,
+    edificio VARCHAR(50) NOT NULL,
+    fecha DATE NOT NULL,
+    id_turno INT NOT NULL,
+    estado ENUM('activa', 'cancelada', 'sin_asistencia', 'finalizada') NOT NULL DEFAULT 'activa',
+    FOREIGN KEY (nombre_sala) REFERENCES sala(nombre_sala) ON DELETE CASCADE,
+    FOREIGN KEY (edificio) REFERENCES edificio(nombre_edificio) ON DELETE CASCADE,
+    FOREIGN KEY (id_turno) REFERENCES turno(id_turno) ON DELETE CASCADE,
+    UNIQUE KEY unique_reserva_sala (nombre_sala, edificio, fecha, id_turno)
+);
+
+
+CREATE TABLE reserva_participante (
+    ci_participante VARCHAR(20) NOT NULL,
+    id_reserva INT NOT NULL,
+    fecha_solicitud_reserva DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    asistencia BOOLEAN DEFAULT NULL,
+    PRIMARY KEY (ci_participante, id_reserva),
+    FOREIGN KEY (ci_participante) REFERENCES participante(ci) ON DELETE CASCADE,
+    FOREIGN KEY (id_reserva) REFERENCES reserva(id_reserva) ON DELETE CASCADE
+);
+
+
+CREATE TABLE sancion_participante (
+    ci_participante VARCHAR(20) NOT NULL,
+    fecha_inicio DATE NOT NULL,
+    fecha_fin DATE NOT NULL,
+    PRIMARY KEY (ci_participante, fecha_inicio),
+    FOREIGN KEY (ci_participante) REFERENCES participante(ci) ON DELETE CASCADE,
+    CHECK (fecha_inicio < fecha_fin)
+);
+
+CREATE TABLE login (
+    correo VARCHAR(100) PRIMARY KEY,
+    contrasena VARCHAR(255) NOT NULL,
+    ci_participante VARCHAR(20) NOT NULL UNIQUE,
+    FOREIGN KEY (ci_participante) REFERENCES participante(ci) ON DELETE CASCADE,
+    FOREIGN KEY (correo) REFERENCES participante(email) ON DELETE CASCADE
+);
+
+
+-- Insertar datos de ejemplo
+INSERT INTO facultad (nombre) VALUES
+('Facultad de Ciencias de la Salud'),
+('Facultad de Ingeniería y Tecnologías'),
+('Facultad de Ciencias Humanas'),
+('Facultad de Empresa y Economía');
+
+INSERT INTO programa_academico (nombre_programa, id_facultad, tipo) VALUES
+('Medicina', 1, 'grado'),
+('Enfermería', 1, 'grado'),
+('Ingeniería en Computación', 2, 'grado'),
+('Maestría en IA', 2, 'posgrado'),
+('Psicología', 3, 'grado'),
+('Doctorado en Educación', 3, 'posgrado');
+
+INSERT INTO turno (hora_inicio, hora_fin) VALUES
+('08:00:00', '09:00:00'),
+('09:00:00', '10:00:00'),
+('10:00:00', '11:00:00'),
+('11:00:00', '12:00:00'),
+('12:00:00', '13:00:00'),
+('13:00:00', '14:00:00'),
+('14:00:00', '15:00:00'),
+('15:00:00', '16:00:00'),
+('16:00:00', '17:00:00'),
+('17:00:00', '18:00:00'),
+('18:00:00', '19:00:00'),
+('19:00:00', '20:00:00'),
+('20:00:00', '21:00:00'),
+('21:00:00', '22:00:00'),
+('22:00:00', '23:00:00');
+
+
+INSERT INTO edificio (nombre_edificio, direccion, departamento) VALUES
+('Edificio Central', 'Av. 8 de Octubre 1234', 'Montevideo'),
+('Edificio Norte', 'Av. Italia 4567', 'Montevideo'),
+('Edificio Salud', 'Bvar. Artigas 2345', 'Montevideo');
+
+INSERT INTO sala (nombre_sala, edificio, capacidad, tipo_sala) VALUES
+('Sala 101', 'Edificio Central', 15, 'libre'),
+('Sala 201', 'Edificio Central', 8, 'posgrado'),
+('Sala 301', 'Edificio Norte', 6, 'docente'),
+('Sala A1', 'Edificio Salud', 12, 'libre'),
+('Sala B1', 'Edificio Salud', 10, 'posgrado');
+
+
+INSERT INTO participante (ci, nombre, apellido, email) VALUES
+('11111111', 'Juan', 'Pérez', 'juan.perez@ucu.edu.uy'),
+('22222222', 'María', 'Gómez', 'maria.gomez@ucu.edu.uy'),
+('33333333', 'Carlos', 'López', 'carlos.lopez@ucu.edu.uy'),
+('44444444', 'Ana', 'Martínez', 'ana.martinez@ucu.edu.uy'),
+('55555555', 'Pedro', 'Rodríguez', 'pedro.rodriguez@ucu.edu.uy');
+
+INSERT INTO participante_programa_academico (ci_participante, nombre_programa, rol) VALUES
+('11111111', 'Ingeniería en Computación', 'alumno'),
+('22222222', 'Maestría en IA', 'alumno'),
+('33333333', 'Psicología', 'alumno'),
+('44444444', 'Medicina', 'docente'),
+('55555555', 'Maestría en IA', 'docente');
