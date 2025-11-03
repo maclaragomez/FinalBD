@@ -64,7 +64,7 @@ class SistemaSalas:
                 sql = "INSERT INTO participante (ci, nombre, apellido, email) VALUES (%s, %s, %s, %s)"
                 cursor.execute(sql, (ci, nombre, apellido, email))
                 conn.commit()
-                print("✅ Participante agregado exitosamente!")
+                print("Participante agregado exitosamente!")
         except Error as e:
             print(f"Error: {e}")
         finally:
@@ -295,7 +295,7 @@ class SistemaSalas:
             elif opcion == '3':
                 self.menu_informacion()
             elif opcion == '4':
-                print("¡Gracias por usar el sistema! 👋")
+                print("¡Gracias por usar el sistema!")
                 break
             else:
                 print("Opción no válida. Intente nuevamente.")
