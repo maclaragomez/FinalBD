@@ -1,7 +1,7 @@
 import pymysql
 from pymysql import Error
 import datetime
-
+import re
 
 class SistemaSalas:
     def __init__(self):
@@ -9,6 +9,8 @@ class SistemaSalas:
         self.user = 'root'
         self.password = 'root'
         self.database = 'gestion_salas_estudio'
+        self.usuario_actual = None
+        self.rol_actual = 'docente'
 
     def get_connection(self):
         try:
@@ -22,38 +24,147 @@ class SistemaSalas:
             )
             return connection
         except Error as e:
-            print(f"Error de conexión: {e}")
+            print(f"Error de conexion: {e}")
             return None
 
-    def probar_conexion(self):
-        """Probar conexión y mostrar tablas"""
-        print("Probando conexión a la base de datos...")
+    def validar_email(self, email):
+        """Validacion basica de email"""
+        if '@' not in email or '.' not in email:
+            return False
+        if len(email) < 5:
+            return False
+        return True
+
+    def verificar_permiso(self, roles_permitidos):
+        """Verificacion simple de permisos por rol"""
+        if self.rol_actual in roles_permitidos:
+            return True
+        else:
+            print(f"No tiene permisos para esta accion. Se requiere: {', '.join(roles_permitidos)}")
+            return False
+
+    # ========== VALIDACIONES DE REGLAS DE NEGOCIO ==========
+    def verificar_limite_horas(self, ci_participante, fecha, id_turno):
+        """Verificar limite de 2 horas diarias"""
         conn = self.get_connection()
-        if conn:
-            try:
-                with conn.cursor() as cursor:
-                    cursor.execute("SHOW TABLES")
-                    tablas = cursor.fetchall()
-                    print(f"Conexión exitosa! Tablas encontradas: {len(tablas)}")
-                    for tabla in tablas:
-                        print(f"   - {list(tabla.values())[0]}")
-                return True
-            except Error as e:
-                print(f"Error: {e}")
-                return False
-            finally:
-                conn.close()
-        return False
+        if not conn:
+            return False
 
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    SELECT COUNT(*) as horas_reservadas
+                    FROM reserva r
+                    JOIN reserva_participante rp ON r.id_reserva = rp.id_reserva
+                    WHERE rp.ci_participante = %s AND r.fecha = %s AND r.estado = 'activa'
+                """, (ci_participante, fecha))
+                resultado = cursor.fetchone()
+                return resultado['horas_reservadas'] < 2
+        except Error as e:
+            print(f"Error: {e}")
+            return False
+        finally:
+            conn.close()
 
+    def verificar_limite_semanal(self, ci_participante, fecha):
+        """Verificar limite de 3 reservas activas por semana"""
+        conn = self.get_connection()
+        if not conn:
+            return False
 
+        try:
+            with conn.cursor() as cursor:
+                # Calcular inicio de semana (lunes)
+                cursor.execute("SELECT DATE_SUB(%s, INTERVAL WEEKDAY(%s) DAY) as inicio_semana", (fecha, fecha))
+                inicio_semana = cursor.fetchone()['inicio_semana']
+                
+                cursor.execute("""
+                    SELECT COUNT(*) as reservas_semana
+                    FROM reserva r
+                    JOIN reserva_participante rp ON r.id_reserva = rp.id_reserva
+                    WHERE rp.ci_participante = %s AND r.fecha >= %s AND r.estado = 'activa'
+                """, (ci_participante, inicio_semana))
+                resultado = cursor.fetchone()
+                return resultado['reservas_semana'] < 3
+        except Error as e:
+            print(f"Error: {e}")
+            return False
+        finally:
+            conn.close()
+
+    def verificar_tipo_sala(self, ci_participante, tipo_sala):
+        """Verificar si el usuario puede usar este tipo de sala"""
+        conn = self.get_connection()
+        if not conn:
+            return False
+
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    SELECT ppa.rol, pa.tipo 
+                    FROM participante_programa_academico ppa
+                    JOIN programa_academico pa ON ppa.nombre_programa = pa.nombre_programa
+                    WHERE ppa.ci_participante = %s
+                """, (ci_participante,))
+                usuario = cursor.fetchone()
+                
+                if not usuario:
+                    return False
+
+                rol = usuario['rol']
+                tipo_usuario = usuario['tipo']
+
+                # Reglas de acceso a salas
+                if tipo_sala == 'libre':
+                    return True
+                elif tipo_sala == 'posgrado':
+                    return rol == 'docente' or tipo_usuario == 'posgrado'
+                elif tipo_sala == 'docente':
+                    return rol == 'docente'
+                else:
+                    return False
+                    
+        except Error as e:
+            print(f"Error: {e}")
+            return False
+        finally:
+            conn.close()
+
+    def verificar_sanciones(self, ci_participante):
+        """Verificar si el usuario tiene sanciones activas"""
+        conn = self.get_connection()
+        if not conn:
+            return False
+
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    SELECT * FROM sancion_participante 
+                    WHERE ci_participante = %s AND fecha_fin >= CURDATE()
+                """, (ci_participante,))
+                sanciones = cursor.fetchall()
+                return len(sanciones) == 0
+        except Error as e:
+            print(f"Error: {e}")
+            return False
+        finally:
+            conn.close()
+
+    # ========== ABM PARTICIPANTES ==========
     def alta_participante(self):
         """Agregar nuevo participante"""
+        if not self.verificar_permiso(['docente']):
+            return
+
         print("\n--- ALTA DE PARTICIPANTE ---")
-        ci = input("Cédula: ")
+        ci = input("Cedula: ")
         nombre = input("Nombre: ")
         apellido = input("Apellido: ")
         email = input("Email: ")
+
+        if not self.validar_email(email):
+            print("Error: El email debe contener @ y . (ej: usuario@ucu.edu.uy)")
+            return
 
         conn = self.get_connection()
         if not conn:
@@ -61,10 +172,16 @@ class SistemaSalas:
 
         try:
             with conn.cursor() as cursor:
+                cursor.execute("SELECT ci FROM participante WHERE ci = %s OR email = %s", (ci, email))
+                if cursor.fetchone():
+                    print("Error: Ya existe un participante con esa cedula o email")
+                    return
+
                 sql = "INSERT INTO participante (ci, nombre, apellido, email) VALUES (%s, %s, %s, %s)"
                 cursor.execute(sql, (ci, nombre, apellido, email))
                 conn.commit()
                 print("Participante agregado exitosamente!")
+                
         except Error as e:
             print(f"Error: {e}")
         finally:
@@ -72,8 +189,11 @@ class SistemaSalas:
 
     def baja_participante(self):
         """Eliminar participante"""
+        if not self.verificar_permiso(['docente']):
+            return
+
         print("\n--- BAJA DE PARTICIPANTE ---")
-        ci = input("Cédula del participante a eliminar: ")
+        ci = input("Cedula del participante a eliminar: ")
 
         conn = self.get_connection()
         if not conn:
@@ -82,15 +202,15 @@ class SistemaSalas:
         try:
             with conn.cursor() as cursor:
                 cursor.execute("SELECT * FROM participante WHERE ci = %s", (ci,))
-                participante = cursor.fetchone()
+                if not cursor.fetchone():
+                    print("No se encontro participante con esa cedula")
+                    return
 
-                if participante:
-                    sql = "DELETE FROM participante WHERE ci = %s"
-                    cursor.execute(sql, (ci,))
-                    conn.commit()
-                    print("Participante eliminado exitosamente!")
-                else:
-                    print("No se encontró participante con esa cédula")
+                sql = "DELETE FROM participante WHERE ci = %s"
+                cursor.execute(sql, (ci,))
+                conn.commit()
+                print("Participante eliminado exitosamente!")
+                
         except Error as e:
             print(f"Error: {e}")
         finally:
@@ -98,8 +218,11 @@ class SistemaSalas:
 
     def modificacion_participante(self):
         """Modificar datos de participante"""
-        print("\n--- MODIFICACIÓN DE PARTICIPANTE ---")
-        ci = input("Cédula del participante a modificar: ")
+        if not self.verificar_permiso(['docente']):
+            return
+
+        print("\n--- MODIFICACION DE PARTICIPANTE ---")
+        ci = input("Cedula del participante a modificar: ")
 
         conn = self.get_connection()
         if not conn:
@@ -107,12 +230,11 @@ class SistemaSalas:
 
         try:
             with conn.cursor() as cursor:
-
                 cursor.execute("SELECT * FROM participante WHERE ci = %s", (ci,))
                 participante = cursor.fetchone()
 
                 if not participante:
-                    print("No se encontró participante con esa cédula")
+                    print("No se encontro participante con esa cedula")
                     return
 
                 print(f"\nDatos actuales:")
@@ -120,10 +242,14 @@ class SistemaSalas:
                 print(f"Apellido: {participante['apellido']}")
                 print(f"Email: {participante['email']}")
 
-                print("\nIngrese nuevos datos (dejar vacío para no cambiar):")
+                print("\nIngrese nuevos datos (dejar vacio para no cambiar):")
                 nuevo_nombre = input("Nuevo nombre: ") or participante['nombre']
                 nuevo_apellido = input("Nuevo apellido: ") or participante['apellido']
                 nuevo_email = input("Nuevo email: ") or participante['email']
+
+                if nuevo_email != participante['email'] and not self.validar_email(nuevo_email):
+                    print("Error: El email debe contener @ y . (ej: usuario@ucu.edu.uy)")
+                    return
 
                 sql = """UPDATE participante 
                          SET nombre = %s, apellido = %s, email = %s 
@@ -137,9 +263,218 @@ class SistemaSalas:
         finally:
             conn.close()
 
+    # ========== ABM SALAS ==========
+    def alta_sala(self):
+        """Agregar nueva sala"""
+        if not self.verificar_permiso(['docente']):
+            return
+
+        print("\n--- ALTA DE SALA ---")
+        nombre_sala = input("Nombre de la sala: ")
+        edificio = input("Edificio: ")
+        capacidad = input("Capacidad: ")
+        
+        print("Tipos de sala: libre, posgrado, docente")
+        tipo_sala = input("Tipo de sala: ")
+
+        conn = self.get_connection()
+        if not conn:
+            return
+
+        try:
+            with conn.cursor() as cursor:
+                sql = "INSERT INTO sala (nombre_sala, edificio, capacidad, tipo_sala) VALUES (%s, %s, %s, %s)"
+                cursor.execute(sql, (nombre_sala, edificio, int(capacidad), tipo_sala))
+                conn.commit()
+                print("Sala agregada exitosamente!")
+                
+        except Error as e:
+            print(f"Error: {e}")
+        finally:
+            conn.close()
+
+    def baja_sala(self):
+        """Eliminar sala"""
+        if not self.verificar_permiso(['docente']):
+            return
+
+        print("\n--- BAJA DE SALA ---")
+        nombre_sala = input("Nombre de la sala a eliminar: ")
+
+        conn = self.get_connection()
+        if not conn:
+            return
+
+        try:
+            with conn.cursor() as cursor:
+                sql = "DELETE FROM sala WHERE nombre_sala = %s"
+                cursor.execute(sql, (nombre_sala,))
+                conn.commit()
+                print("Sala eliminada exitosamente!")
+                
+        except Error as e:
+            print(f"Error: {e}")
+        finally:
+            conn.close()
+
+    # ========== RESERVAS CON VALIDACIONES COMPLETAS ==========
+    def hacer_reserva(self):
+        """Hacer una nueva reserva con todas las validaciones"""
+        if not self.verificar_permiso(['alumno', 'docente']):
+            return
+
+        print("\n--- NUEVA RESERVA ---")
+        
+        self.listar_salas()
+        
+        nombre_sala = input("\nNombre de la sala a reservar: ")
+        fecha = input("Fecha (YYYY-MM-DD): ")
+        
+        self.listar_turnos()
+        id_turno = input("ID del turno: ")
+        ci_participante = input("CI del participante: ")
+
+        # Validaciones completas
+        conn = self.get_connection()
+        if not conn:
+            return
+
+        try:
+            with conn.cursor() as cursor:
+                # 1. Verificar disponibilidad de la sala
+                cursor.execute("""
+                    SELECT * FROM reserva 
+                    WHERE nombre_sala = %s AND fecha = %s AND id_turno = %s AND estado = 'activa'
+                """, (nombre_sala, fecha, id_turno))
+                
+                if cursor.fetchone():
+                    print("La sala ya esta reservada en ese horario")
+                    return
+
+                # 2. Obtener informacion de la sala
+                cursor.execute("SELECT capacidad, tipo_sala FROM sala WHERE nombre_sala = %s", (nombre_sala,))
+                sala_info = cursor.fetchone()
+                if not sala_info:
+                    print("Sala no encontrada")
+                    return
+
+                # 3. Verificar tipo de sala vs usuario
+                if not self.verificar_tipo_sala(ci_participante, sala_info['tipo_sala']):
+                    print("Este usuario no tiene permiso para reservar este tipo de sala")
+                    return
+
+                # 4. Verificar sanciones activas
+                if not self.verificar_sanciones(ci_participante):
+                    print("El usuario tiene sanciones activas y no puede hacer reservas")
+                    return
+
+                # 5. Verificar limites (solo para alumnos de grado en salas libres)
+                cursor.execute("""
+                    SELECT ppa.rol, pa.tipo 
+                    FROM participante_programa_academico ppa
+                    JOIN programa_academico pa ON ppa.nombre_programa = pa.nombre_programa
+                    WHERE ppa.ci_participante = %s
+                """, (ci_participante,))
+                usuario_info = cursor.fetchone()
+                
+                if usuario_info and usuario_info['rol'] == 'alumno' and usuario_info['tipo'] == 'grado' and sala_info['tipo_sala'] == 'libre':
+                    if not self.verificar_limite_horas(ci_participante, fecha, id_turno):
+                        print("El usuario ya tiene 2 horas reservadas hoy")
+                        return
+                    
+                    if not self.verificar_limite_semanal(ci_participante, fecha):
+                        print("El usuario ya tiene 3 reservas activas esta semana")
+                        return
+
+                # 6. Obtener edificio de la sala
+                cursor.execute("SELECT edificio FROM sala WHERE nombre_sala = %s", (nombre_sala,))
+                edificio_info = cursor.fetchone()
+
+                # Crear reserva
+                sql = """
+                INSERT INTO reserva (nombre_sala, edificio, fecha, id_turno, estado) 
+                VALUES (%s, %s, %s, %s, 'activa')
+                """
+                cursor.execute(sql, (nombre_sala, edificio_info['edificio'], fecha, id_turno))
+                id_reserva = cursor.lastrowid
+
+                # Agregar participante a la reserva
+                sql_participante = """
+                INSERT INTO reserva_participante (ci_participante, id_reserva) 
+                VALUES (%s, %s)
+                """
+                cursor.execute(sql_participante, (ci_participante, id_reserva))
+                
+                conn.commit()
+                print("Reserva creada exitosamente!")
+
+        except Error as e:
+            print(f"Error: {e}")
+        finally:
+            conn.close()
+
+    def cancelar_reserva(self):
+        """Cancelar una reserva activa"""
+        if not self.verificar_permiso(['alumno', 'docente']):
+            return
+
+        print("\n--- CANCELAR RESERVA ---")
+        id_reserva = input("ID de la reserva a cancelar: ")
+
+        conn = self.get_connection()
+        if not conn:
+            return
+
+        try:
+            with conn.cursor() as cursor:
+                sql = "UPDATE reserva SET estado = 'cancelada' WHERE id_reserva = %s"
+                cursor.execute(sql, (id_reserva,))
+                conn.commit()
+                print("Reserva cancelada exitosamente!")
+
+        except Error as e:
+            print(f"Error: {e}")
+        finally:
+            conn.close()
+
+    # ========== SANCIONES ==========
+    def aplicar_sancion(self):
+        """Aplicar sancion a un participante"""
+        if not self.verificar_permiso(['docente']):
+            return
+
+        print("\n--- APLICAR SANCION ---")
+        ci_participante = input("Cedula del participante: ")
+        fecha_inicio = input("Fecha inicio (YYYY-MM-DD): ")
+        
+        # Calcular fecha fin (2 meses despues)
+        fecha_inicio_obj = datetime.datetime.strptime(fecha_inicio, '%Y-%m-%d')
+        fecha_fin_obj = fecha_inicio_obj + datetime.timedelta(days=60)
+        fecha_fin = fecha_fin_obj.strftime('%Y-%m-%d')
+
+        print(f"Fecha fin calculada: {fecha_fin} (2 meses de sancion)")
+
+        conn = self.get_connection()
+        if not conn:
+            return
+
+        try:
+            with conn.cursor() as cursor:
+                sql = "INSERT INTO sancion_participante (ci_participante, fecha_inicio, fecha_fin) VALUES (%s, %s, %s)"
+                cursor.execute(sql, (ci_participante, fecha_inicio, fecha_fin))
+                conn.commit()
+                print("Sancion aplicada exitosamente!")
+                
+        except Error as e:
+            print(f"Error: {e}")
+        finally:
+            conn.close()
+
+    # ========== CONSULTAS Y REPORTES COMPLETOS ==========
     def listar_participantes(self):
         """Listar todos los participantes"""
-        print("\n--- LISTA DE PARTICIPANTES ---")
+        if not self.verificar_permiso(['docente']):
+            return
 
         conn = self.get_connection()
         if not conn:
@@ -148,7 +483,7 @@ class SistemaSalas:
         try:
             with conn.cursor() as cursor:
                 cursor.execute("""
-                    SELECT p.ci, p.nombre, p.apellido, p.email, 
+                    SELECT p.ci, p.nombre, p.apellido, p.email,
                            GROUP_CONCAT(CONCAT(ppa.nombre_programa, ' (', ppa.rol, ')') SEPARATOR ', ') as programas
                     FROM participante p
                     LEFT JOIN participante_programa_academico ppa ON p.ci = ppa.ci_participante
@@ -157,12 +492,9 @@ class SistemaSalas:
                 """)
                 participantes = cursor.fetchall()
 
-                if not participantes:
-                    print("No hay participantes registrados")
-                    return
-
+                print("\n--- LISTA DE PARTICIPANTES ---")
                 for part in participantes:
-                    print(f"\nCédula: {part['ci']}")
+                    print(f"\nCedula: {part['ci']}")
                     print(f"Nombre: {part['nombre']} {part['apellido']}")
                     print(f"Email: {part['email']}")
                     print(f"Programas: {part['programas'] or 'Sin programa asignado'}")
@@ -177,8 +509,6 @@ class SistemaSalas:
 
     def listar_salas(self):
         """Listar todas las salas disponibles"""
-        print("\n--- SALAS DISPONIBLES ---")
-
         conn = self.get_connection()
         if not conn:
             return
@@ -193,27 +523,43 @@ class SistemaSalas:
                 """)
                 salas = cursor.fetchall()
 
+                print("\n--- SALAS DISPONIBLES ---")
                 for sala in salas:
                     print(f"\nSala: {sala['nombre_sala']}")
                     print(f"Edificio: {sala['edificio']}")
                     print(f"Capacidad: {sala['capacidad']} personas")
                     print(f"Tipo: {sala['tipo_sala']}")
-                    print(f"Dirección: {sala['direccion']}")
+                    print(f"Direccion: {sala['direccion']}")
                     print("-" * 40)
-
-                print(f"\nTotal: {len(salas)} salas")
 
         except Error as e:
             print(f"Error: {e}")
         finally:
             conn.close()
 
-    # ========== REPORTES BÁSICOS ==========
+    def listar_turnos(self):
+        """Listar todos los turnos disponibles"""
+        conn = self.get_connection()
+        if not conn:
+            return
 
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT * FROM turno ORDER BY hora_inicio")
+                turnos = cursor.fetchall()
+
+                print("\n--- TURNOS DISPONIBLES ---")
+                for turno in turnos:
+                    print(f"ID: {turno['id_turno']} - {turno['hora_inicio']} a {turno['hora_fin']}")
+
+        except Error as e:
+            print(f"Error: {e}")
+        finally:
+            conn.close()
+
+    # ========== REPORTES COMPLETOS ==========
     def reporte_salas_populares(self):
-        """Mostrar salas más reservadas"""
-        print("\n--- SALAS MÁS RESERVADAS ---")
-
+        """Salas mas reservadas"""
         conn = self.get_connection()
         if not conn:
             return
@@ -226,10 +572,11 @@ class SistemaSalas:
                     WHERE r.estado = 'activa'
                     GROUP BY r.nombre_sala, r.edificio
                     ORDER BY total_reservas DESC
-                    LIMIT 5
+                    LIMIT 10
                 """)
                 salas = cursor.fetchall()
 
+                print("\n--- SALAS MAS RESERVADAS ---")
                 for i, sala in enumerate(salas, 1):
                     print(f"{i}. {sala['nombre_sala']} ({sala['edificio']}): {sala['total_reservas']} reservas")
 
@@ -238,10 +585,8 @@ class SistemaSalas:
         finally:
             conn.close()
 
-    def reporte_ocupacion_edificios(self):
-        """Mostrar porcentaje de ocupación por edificio"""
-        print("\n--- OCUPACIÓN POR EDIFICIO ---")
-
+    def reporte_turnos_demandados(self):
+        """Turnos mas demandados"""
         conn = self.get_connection()
         if not conn:
             return
@@ -249,68 +594,350 @@ class SistemaSalas:
         try:
             with conn.cursor() as cursor:
                 cursor.execute("""
-                    SELECT e.nombre_edificio, 
-                           COUNT(r.id_reserva) as reservas_activas,
-                           COUNT(DISTINCT s.nombre_sala) as salas_totales,
-                           ROUND((COUNT(r.id_reserva) / (COUNT(DISTINCT s.nombre_sala) * 15 * 30)) * 100, 2) as porcentaje_ocupacion
-                    FROM edificio e
-                    LEFT JOIN sala s ON e.nombre_edificio = s.edificio
-                    LEFT JOIN reserva r ON s.nombre_sala = r.nombre_sala AND r.estado = 'activa'
-                    GROUP BY e.nombre_edificio
-                    ORDER BY porcentaje_ocupacion DESC
+                    SELECT t.id_turno, t.hora_inicio, t.hora_fin, COUNT(r.id_reserva) as total_reservas
+                    FROM turno t
+                    LEFT JOIN reserva r ON t.id_turno = r.id_turno
+                    GROUP BY t.id_turno, t.hora_inicio, t.hora_fin
+                    ORDER BY total_reservas DESC
                 """)
-                edificios = cursor.fetchall()
+                turnos = cursor.fetchall()
 
-                for edificio in edificios:
-                    print(f"\n{edificio['nombre_edificio']}:")
-                    print(f"  Reservas activas: {edificio['reservas_activas']}")
-                    print(f"  Salas totales: {edificio['salas_totales']}")
-                    print(f"  Ocupación estimada: {edificio['porcentaje_ocupacion']}%")
+                print("\n--- TURNOS MAS DEMANDADOS ---")
+                for i, turno in enumerate(turnos, 1):
+                    print(f"{i}. {turno['hora_inicio']} - {turno['hora_fin']}: {turno['total_reservas']} reservas")
 
         except Error as e:
             print(f"Error: {e}")
         finally:
             conn.close()
 
-    
+    def reporte_promedio_participantes(self):
+        """Promedio de participantes por sala"""
+        conn = self.get_connection()
+        if not conn:
+            return
 
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    SELECT s.nombre_sala, s.edificio, 
+                           COALESCE(AVG(participantes_count), 0) as promedio_participantes
+                    FROM sala s
+                    LEFT JOIN (
+                        SELECT r.id_reserva, r.nombre_sala, r.edificio, COUNT(rp.ci_participante) as participantes_count
+                        FROM reserva r
+                        JOIN reserva_participante rp ON r.id_reserva = rp.id_reserva
+                        GROUP BY r.id_reserva, r.nombre_sala, r.edificio
+                    ) AS reservas ON s.nombre_sala = reservas.nombre_sala AND s.edificio = reservas.edificio
+                    GROUP BY s.nombre_sala, s.edificio
+                """)
+                salas = cursor.fetchall()
+
+                print("\n--- PROMEDIO DE PARTICIPANTES POR SALA ---")
+                for sala in salas:
+                    print(f"{sala['nombre_sala']} ({sala['edificio']}): {sala['promedio_participantes']:.1f} participantes")
+
+        except Error as e:
+            print(f"Error: {e}")
+        finally:
+            conn.close()
+
+    def reporte_reservas_carrera_facultad(self):
+        """Cantidad de reservas por carrera y facultad"""
+        conn = self.get_connection()
+        if not conn:
+            return
+
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    SELECT pa.nombre_programa, f.nombre as facultad, COUNT(rp.id_reserva) as total_reservas
+                    FROM programa_academico pa
+                    JOIN facultad f ON pa.id_facultad = f.id_facultad
+                    JOIN participante_programa_academico ppa ON pa.nombre_programa = ppa.nombre_programa
+                    JOIN reserva_participante rp ON ppa.ci_participante = rp.ci_participante
+                    GROUP BY pa.nombre_programa, f.nombre
+                    ORDER BY total_reservas DESC
+                """)
+                resultados = cursor.fetchall()
+
+                print("\n--- RESERVAS POR CARRERA Y FACULTAD ---")
+                for res in resultados:
+                    print(f"{res['nombre_programa']} ({res['facultad']}): {res['total_reservas']} reservas")
+
+        except Error as e:
+            print(f"Error: {e}")
+        finally:
+            conn.close()
+
+    def reporte_ocupacion_edificio(self):
+        """Porcentaje de ocupacion de salas por edificio"""
+        conn = self.get_connection()
+        if not conn:
+            return
+
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    SELECT e.nombre_edificio,
+                           COUNT(r.id_reserva) as reservas_totales,
+                           (SELECT COUNT(*) FROM turno) * (SELECT COUNT(*) FROM sala WHERE sala.edificio = e.nombre_edificio) as turnos_posibles,
+                           ROUND((COUNT(r.id_reserva) / ((SELECT COUNT(*) FROM turno) * (SELECT COUNT(*) FROM sala WHERE sala.edificio = e.nombre_edificio))) * 100, 2) as porcentaje_ocupacion
+                    FROM edificio e
+                    LEFT JOIN sala s ON e.nombre_edificio = s.edificio
+                    LEFT JOIN reserva r ON s.nombre_sala = r.nombre_sala
+                    GROUP BY e.nombre_edificio
+                """)
+                edificios = cursor.fetchall()
+
+                print("\n--- OCUPACION POR EDIFICIO ---")
+                for edificio in edificios:
+                    print(f"\n{edificio['nombre_edificio']}:")
+                    print(f"  Reservas totales: {edificio['reservas_totales']}")
+                    print(f"  Turnos posibles: {edificio['turnos_posibles']}")
+                    print(f"  Porcentaje de ocupacion: {edificio['porcentaje_ocupacion']}%")
+
+        except Error as e:
+            print(f"Error: {e}")
+        finally:
+            conn.close()
+
+    def reporte_reservas_asistencias(self):
+        """Cantidad de reservas y asistencias por tipo de usuario"""
+        conn = self.get_connection()
+        if not conn:
+            return
+
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    SELECT 
+                        ppa.rol,
+                        pa.tipo,
+                        COUNT(rp.id_reserva) as total_reservas,
+                        SUM(CASE WHEN rp.asistencia = TRUE THEN 1 ELSE 0 END) as asistencias
+                    FROM participante_programa_academico ppa
+                    JOIN programa_academico pa ON ppa.nombre_programa = pa.nombre_programa
+                    JOIN reserva_participante rp ON ppa.ci_participante = rp.ci_participante
+                    GROUP BY ppa.rol, pa.tipo
+                """)
+                resultados = cursor.fetchall()
+
+                print("\n--- RESERVAS Y ASISTENCIAS POR TIPO DE USUARIO ---")
+                for res in resultados:
+                    print(f"{res['rol']} ({res['tipo']}): {res['total_reservas']} reservas, {res['asistencias']} asistencias")
+
+        except Error as e:
+            print(f"Error: {e}")
+        finally:
+            conn.close()
+
+    def reporte_sanciones_tipo(self):
+        """Cantidad de sanciones por tipo de usuario"""
+        conn = self.get_connection()
+        if not conn:
+            return
+
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    SELECT 
+                        ppa.rol,
+                        pa.tipo,
+                        COUNT(sp.ci_participante) as total_sanciones
+                    FROM participante_programa_academico ppa
+                    JOIN programa_academico pa ON ppa.nombre_programa = pa.nombre_programa
+                    JOIN sancion_participante sp ON ppa.ci_participante = sp.ci_participante
+                    GROUP BY ppa.rol, pa.tipo
+                """)
+                resultados = cursor.fetchall()
+
+                print("\n--- SANCIONES POR TIPO DE USUARIO ---")
+                for res in resultados:
+                    print(f"{res['rol']} ({res['tipo']}): {res['total_sanciones']} sanciones")
+
+        except Error as e:
+            print(f"Error: {e}")
+        finally:
+            conn.close()
+
+    def reporte_uso_reservas(self):
+        """Porcentaje de reservas utilizadas vs canceladas/no asistidas"""
+        conn = self.get_connection()
+        if not conn:
+            return
+
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    SELECT 
+                        estado,
+                        COUNT(*) as cantidad,
+                        ROUND((COUNT(*) / (SELECT COUNT(*) FROM reserva)) * 100, 2) as porcentaje
+                    FROM reserva
+                    GROUP BY estado
+                """)
+                estados = cursor.fetchall()
+
+                print("\n--- USO DE RESERVAS ---")
+                for estado in estados:
+                    print(f"{estado['estado']}: {estado['cantidad']} reservas ({estado['porcentaje']}%)")
+
+        except Error as e:
+            print(f"Error: {e}")
+        finally:
+            conn.close()
+
+    # ========== TRES CONSULTAS ADICIONALES ==========
+    def reporte_participantes_activos(self):
+        """Participantes con mas reservas activas"""
+        conn = self.get_connection()
+        if not conn:
+            return
+
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    SELECT p.ci, p.nombre, p.apellido, COUNT(rp.id_reserva) as reservas_activas
+                    FROM participante p
+                    JOIN reserva_participante rp ON p.ci = rp.ci_participante
+                    JOIN reserva r ON rp.id_reserva = r.id_reserva
+                    WHERE r.estado = 'activa'
+                    GROUP BY p.ci, p.nombre, p.apellido
+                    ORDER BY reservas_activas DESC
+                    LIMIT 10
+                """)
+                participantes = cursor.fetchall()
+
+                print("\n--- PARTICIPANTES MAS ACTIVOS ---")
+                for i, part in enumerate(participantes, 1):
+                    print(f"{i}. {part['nombre']} {part['apellido']} ({part['ci']}): {part['reservas_activas']} reservas activas")
+
+        except Error as e:
+            print(f"Error: {e}")
+        finally:
+            conn.close()
+
+    def reporte_salas_sin_uso(self):
+        """Salas que nunca han sido reservadas"""
+        conn = self.get_connection()
+        if not conn:
+            return
+
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    SELECT s.nombre_sala, s.edificio, s.tipo_sala
+                    FROM sala s
+                    LEFT JOIN reserva r ON s.nombre_sala = r.nombre_sala
+                    WHERE r.id_reserva IS NULL
+                    ORDER BY s.edificio, s.nombre_sala
+                """)
+                salas = cursor.fetchall()
+
+                print("\n--- SALAS SIN USO ---")
+                for sala in salas:
+                    print(f"{sala['nombre_sala']} ({sala['edificio']}) - Tipo: {sala['tipo_sala']}")
+
+        except Error as e:
+            print(f"Error: {e}")
+        finally:
+            conn.close()
+
+    def reporte_horarios_pico(self):
+        """Horarios con mas reservas"""
+        conn = self.get_connection()
+        if not conn:
+            return
+
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    SELECT t.hora_inicio, t.hora_fin, DAYNAME(r.fecha) as dia, COUNT(*) as total_reservas
+                    FROM reserva r
+                    JOIN turno t ON r.id_turno = t.id_turno
+                    GROUP BY t.hora_inicio, t.hora_fin, DAYNAME(r.fecha)
+                    ORDER BY total_reservas DESC
+                    LIMIT 10
+                """)
+                horarios = cursor.fetchall()
+
+                print("\n--- HORARIOS PICO ---")
+                for i, horario in enumerate(horarios, 1):
+                    print(f"{i}. {horario['dia']} {horario['hora_inicio']}-{horario['hora_fin']}: {horario['total_reservas']} reservas")
+
+        except Error as e:
+            print(f"Error: {e}")
+        finally:
+            conn.close()
+
+    # ========== MENU PRINCIPAL ==========
     def menu_principal(self):
-        """Menú principal del sistema"""
+        """Menu principal"""
         while True:
-            print("\n" + "=" * 60)
-            print("           SISTEMA DE GESTIÓN DE SALAS DE ESTUDIO - UCU")
-            print("=" * 60)
-            print("1. ABM de Participantes")
-            print("2. Consultas y Reportes")
-            print("3. Información del Sistema")
-            print("4. Salir")
-            print("-" * 60)
+            print("\n" + "=" * 50)
+            print("    SISTEMA DE GESTION DE SALAS - UCU")
+            print("=" * 50)
+            print(f"Modo actual: {self.rol_actual}")
+            print("=" * 50)
+            
+            print("1. Gestion de Participantes")
+            print("2. Gestion de Salas")
+            print("3. Gestion de Reservas")
+            print("4. Gestion de Sanciones")
+            print("5. Consultas y Reportes")
+            print("6. Cambiar rol")
+            print("7. Salir")
+            print("-" * 50)
 
-            opcion = input("Seleccione una opción (1-4): ").strip()
+            opcion = input("Seleccione una opcion (1-7): ").strip()
 
             if opcion == '1':
                 self.menu_participantes()
             elif opcion == '2':
-                self.menu_reportes()
+                self.menu_salas()
             elif opcion == '3':
-                self.menu_informacion()
+                self.menu_reservas()
             elif opcion == '4':
-                print("¡Gracias por usar el sistema!")
+                self.menu_sanciones()
+            elif opcion == '5':
+                self.menu_reportes()
+            elif opcion == '6':
+                self.cambiar_rol()
+            elif opcion == '7':
+                print("Gracias por usar el sistema!")
                 break
             else:
-                print("Opción no válida. Intente nuevamente.")
+                print("Opcion no valida")
+
+    def cambiar_rol(self):
+        """Cambiar entre docente y alumno"""
+        print("\n--- CAMBIAR ROL ---")
+        print(f"Rol actual: {self.rol_actual}")
+        print("1. Docente (acceso completo)")
+        print("2. Alumno (solo reservas y consultas)")
+        
+        opcion = input("Seleccione rol (1-2): ").strip()
+        if opcion == '1':
+            self.rol_actual = 'docente'
+            print("Modo cambiado a DOCENTE")
+        elif opcion == '2':
+            self.rol_actual = 'alumno' 
+            print("Modo cambiado a ALUMNO")
+        else:
+            print("Opcion no valida")
 
     def menu_participantes(self):
-        """Menú de gestión de participantes"""
+        """Menu de gestion de participantes"""
         while True:
-            print("\n--- GESTIÓN DE PARTICIPANTES ---")
+            print("\n--- GESTION DE PARTICIPANTES ---")
             print("1. Alta de participante")
             print("2. Baja de participante")
-            print("3. Modificación de participante")
+            print("3. Modificacion de participante")
             print("4. Listar participantes")
-            print("5. Volver al menú principal")
+            print("5. Volver al menu principal")
 
-            opcion = input("Seleccione una opción (1-5): ").strip()
+            opcion = input("Seleccione una opcion (1-5): ").strip()
 
             if opcion == '1':
                 self.alta_participante()
@@ -323,61 +950,150 @@ class SistemaSalas:
             elif opcion == '5':
                 break
             else:
-                print("Opción no válida.")
+                print("Opcion no valida")
+
+    def menu_salas(self):
+        """Menu de gestion de salas"""
+        while True:
+            print("\n--- GESTION DE SALAS ---")
+            print("1. Alta de sala")
+            print("2. Baja de sala")
+            print("3. Listar salas")
+            print("4. Volver al menu principal")
+
+            opcion = input("Seleccione una opcion (1-4): ").strip()
+
+            if opcion == '1':
+                self.alta_sala()
+            elif opcion == '2':
+                self.baja_sala()
+            elif opcion == '3':
+                self.listar_salas()
+            elif opcion == '4':
+                break
+            else:
+                print("Opcion no valida")
+
+    def menu_reservas(self):
+        """Menu de gestion de reservas"""
+        while True:
+            print("\n--- GESTION DE RESERVAS ---")
+            print("1. Hacer reserva")
+            print("2. Cancelar reserva")
+            print("3. Listar turnos disponibles")
+            print("4. Volver al menu principal")
+
+            opcion = input("Seleccione una opcion (1-4): ").strip()
+
+            if opcion == '1':
+                self.hacer_reserva()
+            elif opcion == '2':
+                self.cancelar_reserva()
+            elif opcion == '3':
+                self.listar_turnos()
+            elif opcion == '4':
+                break
+            else:
+                print("Opcion no valida")
+
+    def menu_sanciones(self):
+        """Menu de gestion de sanciones"""
+        while True:
+            print("\n--- GESTION DE SANCIONES ---")
+            print("1. Aplicar sancion")
+            print("2. Volver al menu principal")
+
+            opcion = input("Seleccione una opcion (1-2): ").strip()
+
+            if opcion == '1':
+                self.aplicar_sancion()
+            elif opcion == '2':
+                break
+            else:
+                print("Opcion no valida")
 
     def menu_reportes(self):
-        """Menú de reportes"""
+        """Menu de reportes completo"""
         while True:
             print("\n--- REPORTES Y CONSULTAS ---")
             print("1. Listar salas disponibles")
-            print("2. Salas más reservadas")
-            print("3. Ocupación por edificio")
-            print("4. Volver al menú principal")
+            print("2. Salas mas reservadas")
+            print("3. Turnos mas demandados")
+            print("4. Promedio participantes por sala")
+            print("5. Reservas por carrera y facultad")
+            print("6. Ocupacion por edificio")
+            print("7. Reservas y asistencias por tipo")
+            print("8. Sanciones por tipo de usuario")
+            print("9. Uso de reservas")
+            print("10. Participantes mas activos")
+            print("11. Salas sin uso")
+            print("12. Horarios pico")
+            print("13. Volver al menu principal")
 
-            opcion = input("Seleccione una opción (1-4): ").strip()
+            opcion = input("Seleccione una opcion (1-13): ").strip()
 
             if opcion == '1':
                 self.listar_salas()
             elif opcion == '2':
                 self.reporte_salas_populares()
             elif opcion == '3':
-                self.reporte_ocupacion_edificios()
+                self.reporte_turnos_demandados()
             elif opcion == '4':
+                self.reporte_promedio_participantes()
+            elif opcion == '5':
+                self.reporte_reservas_carrera_facultad()
+            elif opcion == '6':
+                self.reporte_ocupacion_edificio()
+            elif opcion == '7':
+                self.reporte_reservas_asistencias()
+            elif opcion == '8':
+                self.reporte_sanciones_tipo()
+            elif opcion == '9':
+                self.reporte_uso_reservas()
+            elif opcion == '10':
+                self.reporte_participantes_activos()
+            elif opcion == '11':
+                self.reporte_salas_sin_uso()
+            elif opcion == '12':
+                self.reporte_horarios_pico()
+            elif opcion == '13':
                 break
             else:
-                print("Opción no válida.")
+                print("Opcion no valida")
 
-    def menu_informacion(self):
-        """Información del sistema"""
-        print("\n--- INFORMACIÓN DEL SISTEMA ---")
-        print("Sistema de Gestión de Salas de Estudio - UCU")
-        print("Base de Datos 1 - Segundo Semestre 2025")
-        print("\nFuncionalidades implementadas:")
-        print("ABM completo de participantes")
-        print("Listado de salas y edificios")
-        print("Reportes básicos de uso")
-        print("Conexión a base de datos MySQL")
-        print("\nTecnologías: Python, PyMySQL, MySQL")
-        input("\nPresione Enter para continuar...")
+    def probar_conexion(self):
+        """Probar conexion a la base de datos"""
+        print("Probando conexion a la base de datos...")
+        conn = self.get_connection()
+        if conn:
+            try:
+                with conn.cursor() as cursor:
+                    cursor.execute("SHOW TABLES")
+                    tablas = cursor.fetchall()
+                    print(f"Conexion exitosa! Tablas encontradas: {len(tablas)}")
+                    return True
+            except Error as e:
+                print(f"Error: {e}")
+                return False
+            finally:
+                conn.close()
+        return False
 
 
 def main():
-    """Función principal"""
-    print("INICIANDO SISTEMA DE GESTIÓN DE SALAS...")
+    """Funcion principal"""
+    print("INICIANDO SISTEMA DE GESTION DE SALAS...")
 
     sistema = SistemaSalas()
 
-
     if sistema.probar_conexion():
         print("\nSistema listo para usar!")
-        input("Presione Enter para continuar al menú principal...")
         sistema.menu_principal()
     else:
         print("\nNo se pudo conectar a la base de datos.")
         print("Por favor verifica:")
-        print("1. Que MySQL esté ejecutándose")
-        print("2. Que la contraseña en el código sea correcta")
-        print("3. Que la base de datos 'gestion_salas_estudio' exista")
+        print("1. Que MySQL este ejecutandose")
+        print("2. Que la base de datos 'gestion_salas_estudio' exista")
 
 
 if __name__ == "__main__":
