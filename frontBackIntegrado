@@ -247,6 +247,11 @@ class SistemaSalas:
         if not self.verificar_permiso(['docente']):
             return
 
+        # VALIDAR CAPACIDAD
+        if capacidad <= 0:
+            st.error("Error: La capacidad debe ser mayor a 0")
+            return
+
         conn = self.get_connection()
         if not conn:
             return
@@ -254,7 +259,7 @@ class SistemaSalas:
         try:
             with conn.cursor() as cursor:
                 sql = "INSERT INTO sala (nombre_sala, edificio, capacidad, tipo_sala) VALUES (%s, %s, %s, %s)"
-                cursor.execute(sql, (nombre_sala, edificio, int(capacidad), tipo_sala))
+                cursor.execute(sql, (nombre_sala, edificio, capacidad, tipo_sala))
                 conn.commit()
                 st.success("Sala agregada exitosamente!")
                 
@@ -290,6 +295,10 @@ class SistemaSalas:
         if not self.verificar_permiso(['alumno', 'docente']):
             return
 
+        # Si fecha es date object, convertir a string
+        if not isinstance(fecha, str):
+            fecha = fecha.strftime('%Y-%m-%d')
+
         # Validaciones completas
         conn = self.get_connection()
         if not conn:
@@ -307,8 +316,8 @@ class SistemaSalas:
                     st.error("La sala ya esta reservada en ese horario")
                     return
 
-                # 2. Obtener informacion de la sala
-                cursor.execute("SELECT capacidad, tipo_sala FROM sala WHERE nombre_sala = %s", (nombre_sala,))
+                # 2. Obtener informacion de la sala (CORREGIDO)
+                cursor.execute("SELECT capacidad, tipo_sala, edificio FROM sala WHERE nombre_sala = %s", (nombre_sala,))
                 sala_info = cursor.fetchone()
                 if not sala_info:
                     st.error("Sala no encontrada")
@@ -343,15 +352,14 @@ class SistemaSalas:
                         return
 
                 # 6. Obtener edificio de la sala
-                cursor.execute("SELECT edificio FROM sala WHERE nombre_sala = %s", (nombre_sala,))
-                edificio_info = cursor.fetchone()
+                edificio_info = sala_info['edificio']
 
                 # Crear reserva
                 sql = """
                 INSERT INTO reserva (nombre_sala, edificio, fecha, id_turno, estado) 
                 VALUES (%s, %s, %s, %s, 'activa')
                 """
-                cursor.execute(sql, (nombre_sala, edificio_info['edificio'], fecha, id_turno))
+                cursor.execute(sql, (nombre_sala, edificio_info, fecha, id_turno))
                 id_reserva = cursor.lastrowid
 
                 # Agregar participante a la reserva
@@ -396,10 +404,26 @@ class SistemaSalas:
         if not self.verificar_permiso(['docente']):
             return
 
+        # VALIDAR FECHA (acepta tanto string como date object)
+        if isinstance(fecha_inicio, str):
+            try:
+                fecha_inicio_obj = datetime.datetime.strptime(fecha_inicio, '%Y-%m-%d').date()
+            except ValueError:
+                st.error("Error: Formato de fecha inválido")
+                return
+        else:
+            fecha_inicio_obj = fecha_inicio
+        
+        hoy = datetime.datetime.now().date()
+        
+        if fecha_inicio_obj < hoy:
+            st.error("Error: La fecha de inicio no puede ser en el pasado")
+            return
+
         # Calcular fecha fin (2 meses despues)
-        fecha_inicio_obj = datetime.datetime.strptime(fecha_inicio, '%Y-%m-%d')
         fecha_fin_obj = fecha_inicio_obj + datetime.timedelta(days=60)
         fecha_fin = fecha_fin_obj.strftime('%Y-%m-%d')
+        fecha_inicio_str = fecha_inicio_obj.strftime('%Y-%m-%d')
 
         conn = self.get_connection()
         if not conn:
@@ -408,7 +432,7 @@ class SistemaSalas:
         try:
             with conn.cursor() as cursor:
                 sql = "INSERT INTO sancion_participante (ci_participante, fecha_inicio, fecha_fin) VALUES (%s, %s, %s)"
-                cursor.execute(sql, (ci_participante, fecha_inicio, fecha_fin))
+                cursor.execute(sql, (ci_participante, fecha_inicio_str, fecha_fin))
                 conn.commit()
                 st.success("Sancion aplicada exitosamente!")
                 
@@ -962,8 +986,7 @@ def main_streamlit():
                 ci_participante = st.text_input("CI del participante")
                 
                 if st.form_submit_button("Hacer Reserva"):
-                    fecha_str = fecha.strftime('%Y-%m-%d')
-                    sistema.hacer_reserva(nombre_sala, fecha_str, id_turno, ci_participante)
+                    sistema.hacer_reserva(nombre_sala, fecha, id_turno, ci_participante)
         
         with col2:
             st.subheader("Cancelar Reserva")
@@ -986,8 +1009,7 @@ def main_streamlit():
             fecha_inicio = st.date_input("Fecha inicio")
             
             if st.form_submit_button("Aplicar Sancion"):
-                fecha_inicio_str = fecha_inicio.strftime('%Y-%m-%d')
-                sistema.aplicar_sancion(ci_participante, fecha_inicio_str)
+                sistema.aplicar_sancion(ci_participante, fecha_inicio)
     
     # REPORTES Y CONSULTAS
     elif menu == "Reportes y Consultas":
