@@ -1,14 +1,13 @@
-
 CREATE DATABASE IF NOT EXISTS gestion_salas_estudio;
 USE gestion_salas_estudio;
 
-
+-- facultad
 CREATE TABLE facultad (
     id_facultad INT AUTO_INCREMENT PRIMARY KEY,
     nombre VARCHAR(100) NOT NULL UNIQUE
 );
 
-
+-- programa académico
 CREATE TABLE programa_academico (
     nombre_programa VARCHAR(100) PRIMARY KEY,
     id_facultad INT NOT NULL,
@@ -16,7 +15,7 @@ CREATE TABLE programa_academico (
     FOREIGN KEY (id_facultad) REFERENCES facultad(id_facultad) ON DELETE CASCADE
 );
 
-
+-- participantes
 CREATE TABLE participante (
     ci VARCHAR(20) PRIMARY KEY,
     nombre VARCHAR(50) NOT NULL,
@@ -24,7 +23,7 @@ CREATE TABLE participante (
     email VARCHAR(100) NOT NULL UNIQUE
 );
 
-
+-- relación participante-programa
 CREATE TABLE participante_programa_academico (
     id_alumno_programa INT AUTO_INCREMENT PRIMARY KEY,
     ci_participante VARCHAR(20) NOT NULL,
@@ -35,14 +34,14 @@ CREATE TABLE participante_programa_academico (
     UNIQUE KEY unique_participante_programa (ci_participante, nombre_programa, rol)
 );
 
-
+-- edificios
 CREATE TABLE edificio (
     nombre_edificio VARCHAR(50) PRIMARY KEY,
     direccion VARCHAR(200) NOT NULL,
     departamento VARCHAR(50) NOT NULL
 );
 
-
+-- salas
 CREATE TABLE sala (
     nombre_sala VARCHAR(50) PRIMARY KEY,
     edificio VARCHAR(50) NOT NULL,
@@ -51,7 +50,7 @@ CREATE TABLE sala (
     FOREIGN KEY (edificio) REFERENCES edificio(nombre_edificio) ON DELETE CASCADE
 );
 
-
+-- turnos
 CREATE TABLE turno (
     id_turno INT AUTO_INCREMENT PRIMARY KEY,
     hora_inicio TIME NOT NULL UNIQUE,
@@ -59,7 +58,7 @@ CREATE TABLE turno (
     CHECK (hora_inicio < hora_fin)
 );
 
-
+-- reservas
 CREATE TABLE reserva (
     id_reserva INT AUTO_INCREMENT PRIMARY KEY,
     nombre_sala VARCHAR(50) NOT NULL,
@@ -73,7 +72,7 @@ CREATE TABLE reserva (
     UNIQUE KEY unique_reserva_sala (nombre_sala, edificio, fecha, id_turno)
 );
 
-
+-- relación reserva-participante
 CREATE TABLE reserva_participante (
     ci_participante VARCHAR(20) NOT NULL,
     id_reserva INT NOT NULL,
@@ -84,7 +83,7 @@ CREATE TABLE reserva_participante (
     FOREIGN KEY (id_reserva) REFERENCES reserva(id_reserva) ON DELETE CASCADE
 );
 
-
+-- sanciones
 CREATE TABLE sancion_participante (
     ci_participante VARCHAR(20) NOT NULL,
     fecha_inicio DATE NOT NULL,
@@ -94,6 +93,7 @@ CREATE TABLE sancion_participante (
     CHECK (fecha_inicio < fecha_fin)
 );
 
+-- login
 CREATE TABLE login (
     correo VARCHAR(100) PRIMARY KEY,
     contrasena VARCHAR(255) NOT NULL,
@@ -102,8 +102,7 @@ CREATE TABLE login (
     FOREIGN KEY (correo) REFERENCES participante(email) ON DELETE CASCADE
 );
 
-
--- Insertar datos de ejemplo
+-- datos de ejemplo
 INSERT INTO facultad (nombre) VALUES
 ('Facultad de Ciencias de la Salud'),
 ('Facultad de Ingeniería y Tecnologías'),
@@ -135,7 +134,6 @@ INSERT INTO turno (hora_inicio, hora_fin) VALUES
 ('21:00:00', '22:00:00'),
 ('22:00:00', '23:00:00');
 
-
 INSERT INTO edificio (nombre_edificio, direccion, departamento) VALUES
 ('Edificio Central', 'Av. 8 de Octubre 1234', 'Montevideo'),
 ('Edificio Norte', 'Av. Italia 4567', 'Montevideo'),
@@ -147,7 +145,6 @@ INSERT INTO sala (nombre_sala, edificio, capacidad, tipo_sala) VALUES
 ('Sala 301', 'Edificio Norte', 6, 'docente'),
 ('Sala A1', 'Edificio Salud', 12, 'libre'),
 ('Sala B1', 'Edificio Salud', 10, 'posgrado');
-
 
 INSERT INTO participante (ci, nombre, apellido, email) VALUES
 ('11111111', 'Juan', 'Pérez', 'juan.perez@ucu.edu.uy'),
