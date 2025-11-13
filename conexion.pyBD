@@ -273,7 +273,14 @@ class SistemaSalas:
         nombre_sala = input("Nombre de la sala: ")
         edificio = input("Edificio: ")
         capacidad = input("Capacidad: ")
-        
+    
+    # VALIDAR CAPACIDAD
+        if not capacidad.isdigit() or int(capacidad) <= 0:
+            print("Error: La capacidad debe ser un número mayor a 0")
+            return
+    
+        capacidad_int = int(capacidad)
+    
         print("Tipos de sala: libre, posgrado, docente")
         tipo_sala = input("Tipo de sala: ")
 
@@ -284,10 +291,10 @@ class SistemaSalas:
         try:
             with conn.cursor() as cursor:
                 sql = "INSERT INTO sala (nombre_sala, edificio, capacidad, tipo_sala) VALUES (%s, %s, %s, %s)"
-                cursor.execute(sql, (nombre_sala, edificio, int(capacidad), tipo_sala))
+                cursor.execute(sql, (nombre_sala, edificio, capacidad_int, tipo_sala))
                 conn.commit()
                 print("Sala agregada exitosamente!")
-                
+            
         except Error as e:
             print(f"Error: {e}")
         finally:
@@ -446,9 +453,21 @@ class SistemaSalas:
         print("\n--- APLICAR SANCION ---")
         ci_participante = input("Cedula del participante: ")
         fecha_inicio = input("Fecha inicio (YYYY-MM-DD): ")
+    
+    # VALIDAR FECHA
+        try:
+            fecha_inicio_obj = datetime.datetime.strptime(fecha_inicio, '%Y-%m-%d').date()
+            hoy = datetime.datetime.now().date()
         
-        # Calcular fecha fin (2 meses despues)
-        fecha_inicio_obj = datetime.datetime.strptime(fecha_inicio, '%Y-%m-%d')
+            if fecha_inicio_obj < hoy:
+                print("Error: La fecha de inicio no puede ser en el pasado")
+                return
+            
+        except ValueError:
+            print("Error: Formato de fecha inválido. Use YYYY-MM-DD")
+            return
+
+    # Calcular fecha fin (2 meses despues)
         fecha_fin_obj = fecha_inicio_obj + datetime.timedelta(days=60)
         fecha_fin = fecha_fin_obj.strftime('%Y-%m-%d')
 
@@ -464,12 +483,11 @@ class SistemaSalas:
                 cursor.execute(sql, (ci_participante, fecha_inicio, fecha_fin))
                 conn.commit()
                 print("Sancion aplicada exitosamente!")
-                
+            
         except Error as e:
             print(f"Error: {e}")
         finally:
             conn.close()
-
     # ========== CONSULTAS Y REPORTES COMPLETOS ==========
     def listar_participantes(self):
         """Listar todos los participantes"""
