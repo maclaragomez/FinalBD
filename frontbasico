@@ -1,0 +1,210 @@
+import streamlit as st
+import pymysql
+from pymysql import Error
+import datetime
+import re
+
+class SistemaSalas:
+    def __init__(self):
+        self.host = 'localhost'
+        self.user = 'root'
+        self.password = 'root'
+        self.database = 'gestion_salas_estudio'
+        self.usuario_actual = None
+        self.rol_actual = 'docente'
+
+    def get_connection(self):
+        try:
+            connection = pymysql.connect(
+                host=self.host,
+                user=self.user,
+                password=self.password,
+                database=self.database,
+                charset='utf8mb4',
+                cursorclass=pymysql.cursors.DictCursor
+            )
+            return connection
+        except Error as e:
+            st.error(f"Error de conexion: {e}")
+            return None
+
+#PEGAR CONEXION.PY
+
+def main():
+    st.set_page_config(page_title="Sistema Salas UCU", layout="wide")
+    
+    st.title("SISTEMA DE GESTION DE SALAS - UCU")
+    
+    # Inicializar sistema
+    if 'sistema' not in st.session_state:
+        st.session_state.sistema = SistemaSalas()
+    
+    sistema = st.session_state.sistema
+    
+    # Sidebar para configuracion
+    with st.sidebar:
+        st.header("Configuracion")
+        rol = st.selectbox("Rol", ["docente", "alumno"], index=0)
+        sistema.rol_actual = rol
+        st.write(f"Rol actual: {sistema.rol_actual}")
+        
+        if st.button("Probar Conexion BD"):
+            if sistema.probar_conexion():
+                st.success("Conexion exitosa")
+            else:
+                st.error("Error de conexion")
+    
+    # Menu principal
+    menu = st.selectbox("Menu Principal", [
+        "Gestion de Participantes",
+        "Gestion de Salas", 
+        "Gestion de Reservas",
+        "Gestion de Sanciones",
+        "Reportes y Consultas"
+    ])
+    
+    # GESTION DE PARTICIPANTES
+    if menu == "Gestion de Participantes":
+        st.header("Gestion de Participantes")
+        
+        opcion = st.selectbox("Operacion", [
+            "Alta de participante",
+            "Baja de participante", 
+            "Modificacion de participante",
+            "Listar participantes"
+        ])
+        
+        if opcion == "Alta de participante":
+            with st.form("alta_participante"):
+                st.subheader("Alta de Participante")
+                ci = st.text_input("Cedula")
+                nombre = st.text_input("Nombre")
+                apellido = st.text_input("Apellido")
+                email = st.text_input("Email")
+                
+                if st.form_submit_button("Agregar Participante"):
+                    if sistema.verificar_permiso(['docente']):
+                        # Aqui iria la logica de alta
+                        st.success("Participante agregado exitosamente")
+        
+        elif opcion == "Listar participantes":
+            if st.button("Mostrar Participantes"):
+                sistema.listar_participantes()
+    
+    # GESTION DE SALAS
+    elif menu == "Gestion de Salas":
+        st.header("Gestion de Salas")
+        
+        opcion = st.selectbox("Operacion", [
+            "Alta de sala",
+            "Baja de sala",
+            "Listar salas"
+        ])
+        
+        if opcion == "Alta de sala":
+            with st.form("alta_sala"):
+                st.subheader("Alta de Sala")
+                nombre_sala = st.text_input("Nombre de la sala")
+                edificio = st.text_input("Edificio")
+                capacidad = st.number_input("Capacidad", min_value=1, value=10)
+                tipo_sala = st.selectbox("Tipo de sala", ["libre", "posgrado", "docente"])
+                
+                if st.form_submit_button("Agregar Sala"):
+                    if sistema.verificar_permiso(['docente']):
+                        # Aqui iria la logica de alta
+                        st.success("Sala agregada exitosamente")
+        
+        elif opcion == "Listar salas":
+            if st.button("Mostrar Salas"):
+                sistema.listar_salas()
+    
+    # GESTION DE RESERVAS
+    elif menu == "Gestion de Reservas":
+        st.header("Gestion de Reservas")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.subheader("Nueva Reserva")
+            with st.form("nueva_reserva"):
+                nombre_sala = st.text_input("Nombre de la sala")
+                fecha = st.date_input("Fecha")
+                id_turno = st.number_input("ID del turno", min_value=1, value=1)
+                ci_participante = st.text_input("CI del participante")
+                
+                if st.form_submit_button("Hacer Reserva"):
+                    if sistema.verificar_permiso(['alumno', 'docente']):
+                        # Aqui iria la logica de reserva
+                        st.success("Reserva creada exitosamente")
+        
+        with col2:
+            st.subheader("Cancelar Reserva")
+            with st.form("cancelar_reserva"):
+                id_reserva = st.number_input("ID de la reserva a cancelar", min_value=1)
+                
+                if st.form_submit_button("Cancelar Reserva"):
+                    if sistema.verificar_permiso(['alumno', 'docente']):
+                        # Aqui iria la logica de cancelacion
+                        st.success("Reserva cancelada exitosamente")
+            
+            if st.button("Ver Turnos Disponibles"):
+                sistema.listar_turnos()
+    
+    # GESTION DE SANCIONES
+    elif menu == "Gestion de Sanciones":
+        st.header("Gestion de Sanciones")
+        
+        with st.form("aplicar_sancion"):
+            st.subheader("Aplicar Sancion")
+            ci_participante = st.text_input("Cedula del participante")
+            fecha_inicio = st.date_input("Fecha inicio")
+            
+            if st.form_submit_button("Aplicar Sancion"):
+                if sistema.verificar_permiso(['docente']):
+                    # Aqui iria la logica de sancion
+                    st.success("Sancion aplicada exitosamente")
+    
+    # REPORTES Y CONSULTAS
+    elif menu == "Reportes y Consultas":
+        st.header("Reportes y Consultas")
+        
+        reporte = st.selectbox("Seleccione Reporte", [
+            "Salas mas reservadas",
+            "Turnos mas demandados",
+            "Promedio participantes por sala",
+            "Reservas por carrera y facultad",
+            "Ocupacion por edificio",
+            "Reservas y asistencias por tipo",
+            "Sanciones por tipo de usuario",
+            "Uso de reservas",
+            "Participantes mas activos",
+            "Salas sin uso",
+            "Horarios pico"
+        ])
+        
+        if st.button("Generar Reporte"):
+            if reporte == "Salas mas reservadas":
+                sistema.reporte_salas_populares()
+            elif reporte == "Turnos mas demandados":
+                sistema.reporte_turnos_demandados()
+            elif reporte == "Promedio participantes por sala":
+                sistema.reporte_promedio_participantes()
+            elif reporte == "Reservas por carrera y facultad":
+                sistema.reporte_reservas_carrera_facultad()
+            elif reporte == "Ocupacion por edificio":
+                sistema.reporte_ocupacion_edificio()
+            elif reporte == "Reservas y asistencias por tipo":
+                sistema.reporte_reservas_asistencias()
+            elif reporte == "Sanciones por tipo de usuario":
+                sistema.reporte_sanciones_tipo()
+            elif reporte == "Uso de reservas":
+                sistema.reporte_uso_reservas()
+            elif reporte == "Participantes mas activos":
+                sistema.reporte_participantes_activos()
+            elif reporte == "Salas sin uso":
+                sistema.reporte_salas_sin_uso()
+            elif reporte == "Horarios pico":
+                sistema.reporte_horarios_pico()
+
+if __name__ == "__main__":
+    main()
