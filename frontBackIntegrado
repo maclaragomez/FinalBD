@@ -7,6 +7,7 @@ import sys
 import io
 from contextlib import redirect_stdout
 
+
 class SistemaSalas:
     def __init__(self):
         self.host = 'localhost'
@@ -14,7 +15,8 @@ class SistemaSalas:
         self.password = 'root'
         self.database = 'gestion_salas_estudio'
         self.usuario_actual = None
-        self.rol_actual = 'docente'
+        self.rol_actual = None
+        self.nombre_usuario = None
 
     def get_connection(self):
         try:
@@ -31,6 +33,44 @@ class SistemaSalas:
             st.error(f"Error de conexion: {e}")
             return None
 
+    def login(self, ci):
+        """Verificar credenciales y obtener rol del usuario"""
+        conn = self.get_connection()
+        if not conn:
+            return False
+
+        try:
+            with conn.cursor() as cursor:
+                # Verificar si el participante existe
+                cursor.execute("""
+                    SELECT p.ci, p.nombre, p.apellido, ppa.rol 
+                    FROM participante p
+                    LEFT JOIN participante_programa_academico ppa ON p.ci = ppa.ci_participante
+                    WHERE p.ci = %s
+                """, (ci,))
+
+                usuario = cursor.fetchone()
+
+                if usuario:
+                    self.usuario_actual = usuario['ci']
+                    self.nombre_usuario = f"{usuario['nombre']} {usuario['apellido']}"
+                    self.rol_actual = usuario['rol'] if usuario['rol'] else 'alumno'  # Default a alumno si no tiene rol
+                    return True
+                else:
+                    return False
+
+        except Error as e:
+            st.error(f"Error en login: {e}")
+            return False
+        finally:
+            conn.close()
+
+    def logout(self):
+        """Cerrar sesión"""
+        self.usuario_actual = None
+        self.rol_actual = None
+        self.nombre_usuario = None
+
     def validar_email(self, email):
         """Validacion basica de email"""
         if '@' not in email or '.' not in email:
@@ -41,6 +81,10 @@ class SistemaSalas:
 
     def verificar_permiso(self, roles_permitidos):
         """Verificacion simple de permisos por rol"""
+        if not self.usuario_actual:
+            st.warning("Debe iniciar sesión para realizar esta acción")
+            return False
+
         if self.rol_actual in roles_permitidos:
             return True
         else:
@@ -81,7 +125,7 @@ class SistemaSalas:
                 # Calcular inicio de semana (lunes)
                 cursor.execute("SELECT DATE_SUB(%s, INTERVAL WEEKDAY(%s) DAY) as inicio_semana", (fecha, fecha))
                 inicio_semana = cursor.fetchone()['inicio_semana']
-                
+
                 cursor.execute("""
                     SELECT COUNT(*) as reservas_semana
                     FROM reserva r
@@ -111,7 +155,7 @@ class SistemaSalas:
                     WHERE ppa.ci_participante = %s
                 """, (ci_participante,))
                 usuario = cursor.fetchone()
-                
+
                 if not usuario:
                     return False
 
@@ -127,7 +171,7 @@ class SistemaSalas:
                     return rol == 'docente'
                 else:
                     return False
-                    
+
         except Error as e:
             st.error(f"Error: {e}")
             return False
@@ -175,7 +219,7 @@ class SistemaSalas:
                 cursor.execute(sql, (ci, nombre, apellido, email))
                 conn.commit()
                 st.success("Participante agregado exitosamente!")
-                
+
         except Error as e:
             st.error(f"Error: {e}")
         finally:
@@ -201,7 +245,7 @@ class SistemaSalas:
                 cursor.execute(sql, (ci,))
                 conn.commit()
                 st.success("Participante eliminado exitosamente!")
-                
+
         except Error as e:
             st.error(f"Error: {e}")
         finally:
@@ -262,7 +306,7 @@ class SistemaSalas:
                 cursor.execute(sql, (nombre_sala, edificio, capacidad, tipo_sala))
                 conn.commit()
                 st.success("Sala agregada exitosamente!")
-                
+
         except Error as e:
             st.error(f"Error: {e}")
         finally:
@@ -283,7 +327,7 @@ class SistemaSalas:
                 cursor.execute(sql, (nombre_sala,))
                 conn.commit()
                 st.success("Sala eliminada exitosamente!")
-                
+
         except Error as e:
             st.error(f"Error: {e}")
         finally:
@@ -311,7 +355,7 @@ class SistemaSalas:
                     SELECT * FROM reserva 
                     WHERE nombre_sala = %s AND fecha = %s AND id_turno = %s AND estado = 'activa'
                 """, (nombre_sala, fecha, id_turno))
-                
+
                 if cursor.fetchone():
                     st.error("La sala ya esta reservada en ese horario")
                     return
@@ -341,12 +385,13 @@ class SistemaSalas:
                     WHERE ppa.ci_participante = %s
                 """, (ci_participante,))
                 usuario_info = cursor.fetchone()
-                
-                if usuario_info and usuario_info['rol'] == 'alumno' and usuario_info['tipo'] == 'grado' and sala_info['tipo_sala'] == 'libre':
+
+                if usuario_info and usuario_info['rol'] == 'alumno' and usuario_info['tipo'] == 'grado' and sala_info[
+                    'tipo_sala'] == 'libre':
                     if not self.verificar_limite_horas(ci_participante, fecha, id_turno):
                         st.error("El usuario ya tiene 2 horas reservadas hoy")
                         return
-                    
+
                     if not self.verificar_limite_semanal(ci_participante, fecha):
                         st.error("El usuario ya tiene 3 reservas activas esta semana")
                         return
@@ -368,7 +413,7 @@ class SistemaSalas:
                 VALUES (%s, %s)
                 """
                 cursor.execute(sql_participante, (ci_participante, id_reserva))
-                
+
                 conn.commit()
                 st.success("Reserva creada exitosamente!")
 
@@ -413,9 +458,9 @@ class SistemaSalas:
                 return
         else:
             fecha_inicio_obj = fecha_inicio
-        
+
         hoy = datetime.datetime.now().date()
-        
+
         if fecha_inicio_obj < hoy:
             st.error("Error: La fecha de inicio no puede ser en el pasado")
             return
@@ -435,7 +480,7 @@ class SistemaSalas:
                 cursor.execute(sql, (ci_participante, fecha_inicio_str, fecha_fin))
                 conn.commit()
                 st.success("Sancion aplicada exitosamente!")
-                
+
         except Error as e:
             st.error(f"Error: {e}")
         finally:
@@ -606,7 +651,8 @@ class SistemaSalas:
 
                 st.subheader("PROMEDIO DE PARTICIPANTES POR SALA")
                 for sala in salas:
-                    st.write(f"{sala['nombre_sala']} ({sala['edificio']}): {sala['promedio_participantes']:.1f} participantes")
+                    st.write(
+                        f"{sala['nombre_sala']} ({sala['edificio']}): {sala['promedio_participantes']:.1f} participantes")
 
         except Error as e:
             st.error(f"Error: {e}")
@@ -697,7 +743,8 @@ class SistemaSalas:
 
                 st.subheader("RESERVAS Y ASISTENCIAS POR TIPO DE USUARIO")
                 for res in resultados:
-                    st.write(f"{res['rol']} ({res['tipo']}): {res['total_reservas']} reservas, {res['asistencias']} asistencias")
+                    st.write(
+                        f"{res['rol']} ({res['tipo']}): {res['total_reservas']} reservas, {res['asistencias']} asistencias")
 
         except Error as e:
             st.error(f"Error: {e}")
@@ -783,7 +830,8 @@ class SistemaSalas:
 
                 st.subheader("PARTICIPANTES MAS ACTIVOS")
                 for i, part in enumerate(participantes, 1):
-                    st.write(f"{i}. {part['nombre']} {part['apellido']} ({part['ci']}): {part['reservas_activas']} reservas activas")
+                    st.write(
+                        f"{i}. {part['nombre']} {part['apellido']} ({part['ci']}): {part['reservas_activas']} reservas activas")
 
         except Error as e:
             st.error(f"Error: {e}")
@@ -836,7 +884,8 @@ class SistemaSalas:
 
                 st.subheader("HORARIOS PICO")
                 for i, horario in enumerate(horarios, 1):
-                    st.write(f"{i}. {horario['dia']} {horario['hora_inicio']}-{horario['hora_fin']}: {horario['total_reservas']} reservas")
+                    st.write(
+                        f"{i}. {horario['dia']} {horario['hora_inicio']}-{horario['hora_fin']}: {horario['total_reservas']} reservas")
 
         except Error as e:
             st.error(f"Error: {e}")
@@ -858,52 +907,82 @@ class SistemaSalas:
                 conn.close()
         return False, "No se pudo conectar a la base de datos"
 
+
 # INTERFAZ STREAMLIT
 def main_streamlit():
     st.set_page_config(page_title="Sistema Salas UCU", layout="wide")
-    
+
     st.title("SISTEMA DE GESTION DE SALAS - UCU")
-    
+
     # Inicializar sistema
     if 'sistema' not in st.session_state:
         st.session_state.sistema = SistemaSalas()
-    
+
     sistema = st.session_state.sistema
-    
-    # Sidebar para configuracion
+
+    # Sidebar para login y configuracion
     with st.sidebar:
-        st.header("Configuracion")
-        rol = st.selectbox("Rol", ["docente", "alumno"], index=0)
-        sistema.rol_actual = rol
-        st.write(f"Rol actual: {sistema.rol_actual}")
-        
-        if st.button("Probar Conexion BD"):
+        st.header("Autenticación")
+
+        # Si no hay usuario logueado, mostrar formulario de login
+        if not sistema.usuario_actual:
+            with st.form("login_form"):
+                ci = st.text_input("Cédula de Identidad")
+
+                if st.form_submit_button("Ingresar al Sistema"):
+                    if sistema.login(ci):
+                        st.success(f"Bienvenido/a {sistema.nombre_usuario}!")
+                        st.rerun()  # Cambiado por st.rerun()
+                    else:
+                        st.error("Cédula no encontrada en el sistema")
+        else:
+            # Usuario logueado - mostrar información y opción de logout
+            st.success(f"Conectado como: {sistema.nombre_usuario}")
+            st.info(f"Rol: {sistema.rol_actual}")
+            st.info(f"CI: {sistema.usuario_actual}")
+
+            if st.button("Cerrar Sesión"):
+                sistema.logout()
+                st.rerun()  # Cambiado por st.rerun()
+
+        st.header("Configuración")
+        if st.button("Probar Conexión BD"):
             resultado, mensaje = sistema.probar_conexion()
             if resultado:
                 st.success(mensaje)
             else:
                 st.error(mensaje)
-    
-    # Menu principal
+
+    # Verificar si el usuario está logueado antes de mostrar el menú principal
+    if not sistema.usuario_actual:
+        st.warning("Por favor, ingrese con su cédula en el sidebar para acceder al sistema")
+        return
+
+    # Menu principal (solo visible si está logueado)
     menu = st.selectbox("Menu Principal", [
         "Gestion de Participantes",
-        "Gestion de Salas", 
+        "Gestion de Salas",
         "Gestion de Reservas",
         "Gestion de Sanciones",
         "Reportes y Consultas"
     ])
-    
+
+    # Mostrar información del usuario actual
+    st.sidebar.write("---")
+    st.sidebar.write(f"**Usuario actual:** {sistema.nombre_usuario}")
+    st.sidebar.write(f"**Rol:** {sistema.rol_actual}")
+
     # GESTION DE PARTICIPANTES
     if menu == "Gestion de Participantes":
         st.header("Gestion de Participantes")
-        
+
         opcion = st.selectbox("Operacion", [
             "Alta de participante",
-            "Baja de participante", 
+            "Baja de participante",
             "Modificacion de participante",
             "Listar participantes"
         ])
-        
+
         if opcion == "Alta de participante":
             with st.form("alta_participante"):
                 st.subheader("Alta de Participante")
@@ -911,18 +990,18 @@ def main_streamlit():
                 nombre = st.text_input("Nombre")
                 apellido = st.text_input("Apellido")
                 email = st.text_input("Email")
-                
+
                 if st.form_submit_button("Agregar Participante"):
                     sistema.alta_participante(ci, nombre, apellido, email)
-        
+
         elif opcion == "Baja de participante":
             with st.form("baja_participante"):
                 st.subheader("Baja de Participante")
                 ci = st.text_input("Cedula del participante a eliminar")
-                
+
                 if st.form_submit_button("Eliminar Participante"):
                     sistema.baja_participante(ci)
-        
+
         elif opcion == "Modificacion de participante":
             with st.form("modificacion_participante"):
                 st.subheader("Modificacion de Participante")
@@ -930,24 +1009,24 @@ def main_streamlit():
                 nuevo_nombre = st.text_input("Nuevo nombre")
                 nuevo_apellido = st.text_input("Nuevo apellido")
                 nuevo_email = st.text_input("Nuevo email")
-                
+
                 if st.form_submit_button("Actualizar Participante"):
                     sistema.modificacion_participante(ci, nuevo_nombre, nuevo_apellido, nuevo_email)
-        
+
         elif opcion == "Listar participantes":
             if st.button("Mostrar Participantes"):
                 sistema.listar_participantes()
-    
+
     # GESTION DE SALAS
     elif menu == "Gestion de Salas":
         st.header("Gestion de Salas")
-        
+
         opcion = st.selectbox("Operacion", [
             "Alta de sala",
             "Baja de sala",
             "Listar salas"
         ])
-        
+
         if opcion == "Alta de sala":
             with st.form("alta_sala"):
                 st.subheader("Alta de Sala")
@@ -955,28 +1034,28 @@ def main_streamlit():
                 edificio = st.text_input("Edificio")
                 capacidad = st.number_input("Capacidad", min_value=1, value=10)
                 tipo_sala = st.selectbox("Tipo de sala", ["libre", "posgrado", "docente"])
-                
+
                 if st.form_submit_button("Agregar Sala"):
                     sistema.alta_sala(nombre_sala, edificio, capacidad, tipo_sala)
-        
+
         elif opcion == "Baja de sala":
             with st.form("baja_sala"):
                 st.subheader("Baja de Sala")
                 nombre_sala = st.text_input("Nombre de la sala a eliminar")
-                
+
                 if st.form_submit_button("Eliminar Sala"):
                     sistema.baja_sala(nombre_sala)
-        
+
         elif opcion == "Listar salas":
             if st.button("Mostrar Salas"):
                 sistema.listar_salas()
-    
+
     # GESTION DE RESERVAS
     elif menu == "Gestion de Reservas":
         st.header("Gestion de Reservas")
-        
+
         col1, col2 = st.columns(2)
-        
+
         with col1:
             st.subheader("Nueva Reserva")
             with st.form("nueva_reserva"):
@@ -984,37 +1063,37 @@ def main_streamlit():
                 fecha = st.date_input("Fecha")
                 id_turno = st.number_input("ID del turno", min_value=1, value=1)
                 ci_participante = st.text_input("CI del participante")
-                
+
                 if st.form_submit_button("Hacer Reserva"):
                     sistema.hacer_reserva(nombre_sala, fecha, id_turno, ci_participante)
-        
+
         with col2:
             st.subheader("Cancelar Reserva")
             with st.form("cancelar_reserva"):
                 id_reserva = st.number_input("ID de la reserva a cancelar", min_value=1)
-                
+
                 if st.form_submit_button("Cancelar Reserva"):
                     sistema.cancelar_reserva(id_reserva)
-            
+
             if st.button("Ver Turnos Disponibles"):
                 sistema.listar_turnos()
-    
+
     # GESTION DE SANCIONES
     elif menu == "Gestion de Sanciones":
         st.header("Gestion de Sanciones")
-        
+
         with st.form("aplicar_sancion"):
             st.subheader("Aplicar Sancion")
             ci_participante = st.text_input("Cedula del participante")
             fecha_inicio = st.date_input("Fecha inicio")
-            
+
             if st.form_submit_button("Aplicar Sancion"):
                 sistema.aplicar_sancion(ci_participante, fecha_inicio)
-    
+
     # REPORTES Y CONSULTAS
     elif menu == "Reportes y Consultas":
         st.header("Reportes y Consultas")
-        
+
         reporte = st.selectbox("Seleccione Reporte", [
             "Salas mas reservadas",
             "Turnos mas demandados",
@@ -1028,7 +1107,7 @@ def main_streamlit():
             "Salas sin uso",
             "Horarios pico"
         ])
-        
+
         if st.button("Generar Reporte"):
             if reporte == "Salas mas reservadas":
                 sistema.reporte_salas_populares()
@@ -1052,6 +1131,7 @@ def main_streamlit():
                 sistema.reporte_salas_sin_uso()
             elif reporte == "Horarios pico":
                 sistema.reporte_horarios_pico()
+
 
 if __name__ == "__main__":
     main_streamlit()
