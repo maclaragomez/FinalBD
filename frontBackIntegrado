@@ -41,6 +41,18 @@ class SistemaSalas:
 
         try:
             with conn.cursor() as cursor:
+                # Verificar si es administrador
+                if ci == "admin":
+                    cursor.execute("SELECT * FROM administrador WHERE usuario = 'admin'")
+                    admin = cursor.fetchone()
+                    if admin:
+                        self.usuario_actual = "admin"
+                        self.nombre_usuario = "Administrador del Sistema"
+                        self.rol_actual = 'admin'
+                        return True
+                    else:
+                        return False
+
                 # Verificar si el participante existe
                 cursor.execute("""
                     SELECT p.ci, p.nombre, p.apellido, ppa.rol 
@@ -54,7 +66,7 @@ class SistemaSalas:
                 if usuario:
                     self.usuario_actual = usuario['ci']
                     self.nombre_usuario = f"{usuario['nombre']} {usuario['apellido']}"
-                    self.rol_actual = usuario['rol'] if usuario['rol'] else 'alumno'  # Default a alumno si no tiene rol
+                    self.rol_actual = usuario['rol'] if usuario['rol'] else 'alumno'
                     return True
                 else:
                     return False
@@ -80,16 +92,42 @@ class SistemaSalas:
         return True
 
     def verificar_permiso(self, roles_permitidos):
-        """Verificacion simple de permisos por rol"""
+        """Verificacion de permisos por rol"""
         if not self.usuario_actual:
-            st.warning("Debe iniciar sesión para realizar esta acción")
+            st.warning("Debe iniciar sesion para realizar esta accion")
             return False
+
+        # Admin tiene acceso completo
+        if self.rol_actual == 'admin':
+            return True
 
         if self.rol_actual in roles_permitidos:
             return True
         else:
             st.warning(f"No tiene permisos para esta accion. Se requiere: {', '.join(roles_permitidos)}")
             return False
+
+    # ========== PERMISOS ESPECIFICOS POR ROL ==========
+
+    def puede_gestionar_participantes(self):
+        """Solo admin y docentes pueden gestionar participantes"""
+        return self.verificar_permiso(['admin', 'docente'])
+
+    def puede_gestionar_salas(self):
+        """Solo admin puede gestionar salas"""
+        return self.verificar_permiso(['admin'])
+
+    def puede_gestionar_reservas(self):
+        """Todos los roles pueden gestionar reservas"""
+        return self.verificar_permiso(['admin', 'docente', 'alumno'])
+
+    def puede_gestionar_sanciones(self):
+        """Solo admin puede gestionar sanciones"""
+        return self.verificar_permiso(['admin'])
+
+    def puede_ver_reportes(self):
+        """Solo admin puede ver reportes completos"""
+        return self.verificar_permiso(['admin'])
 
     # ========== VALIDACIONES DE REGLAS DE NEGOCIO ==========
     def verificar_limite_horas(self, ci_participante, fecha, id_turno):
@@ -201,7 +239,7 @@ class SistemaSalas:
     # ========== ABM PARTICIPANTES ==========
     def alta_participante(self, ci, nombre, apellido, email):
         """Agregar nuevo participante"""
-        if not self.verificar_permiso(['docente']):
+        if not self.puede_gestionar_participantes():
             return
 
         conn = self.get_connection()
@@ -227,7 +265,7 @@ class SistemaSalas:
 
     def baja_participante(self, ci):
         """Eliminar participante"""
-        if not self.verificar_permiso(['docente']):
+        if not self.puede_gestionar_participantes():
             return
 
         conn = self.get_connection()
@@ -253,7 +291,7 @@ class SistemaSalas:
 
     def modificacion_participante(self, ci, nuevo_nombre, nuevo_apellido, nuevo_email):
         """Modificar datos de participante"""
-        if not self.verificar_permiso(['docente']):
+        if not self.puede_gestionar_participantes():
             return
 
         conn = self.get_connection()
@@ -288,7 +326,7 @@ class SistemaSalas:
     # ========== ABM SALAS ==========
     def alta_sala(self, nombre_sala, edificio, capacidad, tipo_sala):
         """Agregar nueva sala"""
-        if not self.verificar_permiso(['docente']):
+        if not self.puede_gestionar_salas():
             return
 
         # VALIDAR CAPACIDAD
@@ -314,7 +352,7 @@ class SistemaSalas:
 
     def baja_sala(self, nombre_sala):
         """Eliminar sala"""
-        if not self.verificar_permiso(['docente']):
+        if not self.puede_gestionar_salas():
             return
 
         conn = self.get_connection()
@@ -336,7 +374,7 @@ class SistemaSalas:
     # ========== RESERVAS CON VALIDACIONES COMPLETAS ==========
     def hacer_reserva(self, nombre_sala, fecha, id_turno, ci_participante):
         """Hacer una nueva reserva con todas las validaciones"""
-        if not self.verificar_permiso(['alumno', 'docente']):
+        if not self.puede_gestionar_reservas():
             return
 
         # Si fecha es date object, convertir a string
@@ -424,7 +462,7 @@ class SistemaSalas:
 
     def cancelar_reserva(self, id_reserva):
         """Cancelar una reserva activa"""
-        if not self.verificar_permiso(['alumno', 'docente']):
+        if not self.puede_gestionar_reservas():
             return
 
         conn = self.get_connection()
@@ -446,7 +484,7 @@ class SistemaSalas:
     # ========== SANCIONES ==========
     def aplicar_sancion(self, ci_participante, fecha_inicio):
         """Aplicar sancion a un participante"""
-        if not self.verificar_permiso(['docente']):
+        if not self.puede_gestionar_sanciones():
             return
 
         # VALIDAR FECHA (acepta tanto string como date object)
@@ -454,7 +492,7 @@ class SistemaSalas:
             try:
                 fecha_inicio_obj = datetime.datetime.strptime(fecha_inicio, '%Y-%m-%d').date()
             except ValueError:
-                st.error("Error: Formato de fecha inválido")
+                st.error("Error: Formato de fecha invalido")
                 return
         else:
             fecha_inicio_obj = fecha_inicio
@@ -489,7 +527,7 @@ class SistemaSalas:
     # ========== CONSULTAS Y REPORTES COMPLETOS ==========
     def listar_participantes(self):
         """Listar todos los participantes"""
-        if not self.verificar_permiso(['docente']):
+        if not self.puede_gestionar_participantes():
             return
 
         conn = self.get_connection()
@@ -576,6 +614,9 @@ class SistemaSalas:
     # ========== REPORTES COMPLETOS ==========
     def reporte_salas_populares(self):
         """Salas mas reservadas"""
+        if not self.puede_ver_reportes():
+            return
+
         conn = self.get_connection()
         if not conn:
             return
@@ -603,6 +644,9 @@ class SistemaSalas:
 
     def reporte_turnos_demandados(self):
         """Turnos mas demandados"""
+        if not self.puede_ver_reportes():
+            return
+
         conn = self.get_connection()
         if not conn:
             return
@@ -629,6 +673,9 @@ class SistemaSalas:
 
     def reporte_promedio_participantes(self):
         """Promedio de participantes por sala"""
+        if not self.puede_ver_reportes():
+            return
+
         conn = self.get_connection()
         if not conn:
             return
@@ -661,6 +708,9 @@ class SistemaSalas:
 
     def reporte_reservas_carrera_facultad(self):
         """Cantidad de reservas por carrera y facultad"""
+        if not self.puede_ver_reportes():
+            return
+
         conn = self.get_connection()
         if not conn:
             return
@@ -689,6 +739,9 @@ class SistemaSalas:
 
     def reporte_ocupacion_edificio(self):
         """Porcentaje de ocupacion de salas por edificio"""
+        if not self.puede_ver_reportes():
+            return
+
         conn = self.get_connection()
         if not conn:
             return
@@ -722,6 +775,9 @@ class SistemaSalas:
 
     def reporte_reservas_asistencias(self):
         """Cantidad de reservas y asistencias por tipo de usuario"""
+        if not self.puede_ver_reportes():
+            return
+
         conn = self.get_connection()
         if not conn:
             return
@@ -753,6 +809,9 @@ class SistemaSalas:
 
     def reporte_sanciones_tipo(self):
         """Cantidad de sanciones por tipo de usuario"""
+        if not self.puede_ver_reportes():
+            return
+
         conn = self.get_connection()
         if not conn:
             return
@@ -782,6 +841,9 @@ class SistemaSalas:
 
     def reporte_uso_reservas(self):
         """Porcentaje de reservas utilizadas vs canceladas/no asistidas"""
+        if not self.puede_ver_reportes():
+            return
+
         conn = self.get_connection()
         if not conn:
             return
@@ -810,6 +872,9 @@ class SistemaSalas:
     # ========== TRES CONSULTAS ADICIONALES ==========
     def reporte_participantes_activos(self):
         """Participantes con mas reservas activas"""
+        if not self.puede_ver_reportes():
+            return
+
         conn = self.get_connection()
         if not conn:
             return
@@ -840,6 +905,9 @@ class SistemaSalas:
 
     def reporte_salas_sin_uso(self):
         """Salas que nunca han sido reservadas"""
+        if not self.puede_ver_reportes():
+            return
+
         conn = self.get_connection()
         if not conn:
             return
@@ -866,6 +934,9 @@ class SistemaSalas:
 
     def reporte_horarios_pico(self):
         """Horarios con mas reservas"""
+        if not self.puede_ver_reportes():
+            return
+
         conn = self.get_connection()
         if not conn:
             return
@@ -922,52 +993,67 @@ def main_streamlit():
 
     # Sidebar para login y configuracion
     with st.sidebar:
-        st.header("Autenticación")
+        st.header("Autenticacion")
 
         # Si no hay usuario logueado, mostrar formulario de login
         if not sistema.usuario_actual:
             with st.form("login_form"):
-                ci = st.text_input("Cédula de Identidad")
+                ci = st.text_input("Cedula de Identidad (o 'admin' para administrador)")
 
                 if st.form_submit_button("Ingresar al Sistema"):
                     if sistema.login(ci):
                         st.success(f"Bienvenido/a {sistema.nombre_usuario}!")
-                        st.rerun()  # Cambiado por st.rerun()
+                        st.rerun()
                     else:
-                        st.error("Cédula no encontrada en el sistema")
+                        st.error("Credenciales no validas")
         else:
-            # Usuario logueado - mostrar información y opción de logout
+            # Usuario logueado - mostrar informacion y opcion de logout
             st.success(f"Conectado como: {sistema.nombre_usuario}")
             st.info(f"Rol: {sistema.rol_actual}")
-            st.info(f"CI: {sistema.usuario_actual}")
+            if sistema.rol_actual != 'admin':
+                st.info(f"CI: {sistema.usuario_actual}")
 
-            if st.button("Cerrar Sesión"):
+            if st.button("Cerrar Sesion"):
                 sistema.logout()
-                st.rerun()  # Cambiado por st.rerun()
+                st.rerun()
 
-        st.header("Configuración")
-        if st.button("Probar Conexión BD"):
+        st.header("Configuracion")
+        if st.button("Probar Conexion BD"):
             resultado, mensaje = sistema.probar_conexion()
             if resultado:
                 st.success(mensaje)
             else:
                 st.error(mensaje)
 
-    # Verificar si el usuario está logueado antes de mostrar el menú principal
+    # Verificar si el usuario esta logueado antes de mostrar el menu principal
     if not sistema.usuario_actual:
-        st.warning("Por favor, ingrese con su cédula en el sidebar para acceder al sistema")
+        st.warning("Por favor, ingrese con su cedula en el sidebar para acceder al sistema")
+        st.info("Use 'admin' como usuario para acceder como administrador")
         return
 
-    # Menu principal (solo visible si está logueado)
-    menu = st.selectbox("Menu Principal", [
-        "Gestion de Participantes",
-        "Gestion de Salas",
-        "Gestion de Reservas",
-        "Gestion de Sanciones",
-        "Reportes y Consultas"
-    ])
+    # Menu principal (solo visible si esta logueado)
+    # Para admin mostrar todas las opciones
+    if sistema.rol_actual == 'admin':
+        menu_options = [
+            "Gestion de Participantes",
+            "Gestion de Salas",
+            "Gestion de Reservas",
+            "Gestion de Sanciones",
+            "Reportes y Consultas"
+        ]
+    # Para docentes mostrar opciones limitadas
+    elif sistema.rol_actual == 'docente':
+        menu_options = [
+            "Gestion de Participantes",
+            "Gestion de Reservas"
+        ]
+    # Para alumnos solo reservas
+    else:  # alumno
+        menu_options = ["Gestion de Reservas"]
 
-    # Mostrar información del usuario actual
+    menu = st.selectbox("Menu Principal", menu_options)
+
+    # Mostrar informacion del usuario actual
     st.sidebar.write("---")
     st.sidebar.write(f"**Usuario actual:** {sistema.nombre_usuario}")
     st.sidebar.write(f"**Rol:** {sistema.rol_actual}")
@@ -1062,7 +1148,12 @@ def main_streamlit():
                 nombre_sala = st.text_input("Nombre de la sala")
                 fecha = st.date_input("Fecha")
                 id_turno = st.number_input("ID del turno", min_value=1, value=1)
-                ci_participante = st.text_input("CI del participante")
+                # Para alumnos y docentes, usar su propia cedula automaticamente
+                if sistema.rol_actual in ['alumno', 'docente']:
+                    ci_participante = sistema.usuario_actual
+                    st.info(f"Reservando para: {ci_participante}")
+                else:
+                    ci_participante = st.text_input("CI del participante")
 
                 if st.form_submit_button("Hacer Reserva"):
                     sistema.hacer_reserva(nombre_sala, fecha, id_turno, ci_participante)
@@ -1077,6 +1168,9 @@ def main_streamlit():
 
             if st.button("Ver Turnos Disponibles"):
                 sistema.listar_turnos()
+
+            if st.button("Ver Salas Disponibles"):
+                sistema.listar_salas()
 
     # GESTION DE SANCIONES
     elif menu == "Gestion de Sanciones":
