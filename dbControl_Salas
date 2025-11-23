@@ -159,3 +159,17 @@ INSERT INTO participante_programa_academico (ci_participante, nombre_programa, r
 ('33333333', 'Psicología', 'alumno'),
 ('44444444', 'Medicina', 'docente'),
 ('55555555', 'Maestría en IA', 'docente');
+
+
+-- Tabla para administradores
+CREATE TABLE administrador (
+    id_admin INT AUTO_INCREMENT PRIMARY KEY,
+    usuario VARCHAR(50) NOT NULL UNIQUE,
+    contrasena VARCHAR(255) NOT NULL,
+    nombre VARCHAR(100) NOT NULL,
+    email VARCHAR(100) NOT NULL
+);
+
+-- Insertar administrador por defecto
+INSERT INTO administrador (usuario, contrasena, nombre, email) VALUES
+('admin', 'admin123', 'Administrador Principal', 'admin@ucu.edu.uy');
