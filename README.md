@@ -53,7 +53,7 @@ Sistema integral para la gestión de reservas, control de asistencia y generaci�
 
 ### 1. Clonar o Descargar el Proyecto
 ```bash
-git clone <url-del-repositorio>
+git clone <https://github.com/maclaragomez/FinalBD>
 cd gestion-salas-ucu
 
 
@@ -200,8 +200,7 @@ pip install --upgrade streamlit pymysql
 gestion-salas-ucu/
 │
 ├── sistema_salas.py # Aplicación principal
-├── script.sql # Script de base de datos
-├── requirements.txt # Dependencias (opcional)
+├── dbControl_Salas # Script de base de datos
 └── README.md # Este archivo
 
 ## Desarrollo
