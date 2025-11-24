@@ -212,3 +212,6 @@ gestion-salas-ucu/
 
 ## Licencia
 Universidad Católica del Uruguay - Base de Datos 1 - 2025
+
+## Autores
+Gomez, Tarigo, Von Sanden
