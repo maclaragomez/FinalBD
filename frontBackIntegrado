@@ -6,6 +6,7 @@ import re
 import sys
 import io
 from contextlib import redirect_stdout
+import hashlib
 
 
 class SistemaSalas:
@@ -33,7 +34,11 @@ class SistemaSalas:
             st.error(f"Error de conexion: {e}")
             return None
 
-    def login(self, ci):
+    def hash_password(self, password):
+        """Hash básico para contraseñas"""
+        return hashlib.sha256(password.encode()).hexdigest()
+
+    def login(self, ci, password):
         """Verificar credenciales y obtener rol del usuario"""
         conn = self.get_connection()
         if not conn:
@@ -45,34 +50,63 @@ class SistemaSalas:
                 if ci == "admin":
                     cursor.execute("SELECT * FROM administrador WHERE usuario = 'admin'")
                     admin = cursor.fetchone()
-                    if admin:
+                    if admin and admin['contrasena'] == password:  # Contraseña en texto plano para admin
                         self.usuario_actual = "admin"
-                        self.nombre_usuario = "Administrador del Sistema"
+                        self.nombre_usuario = admin['nombre']
                         self.rol_actual = 'admin'
                         return True
                     else:
+                        st.error("Credenciales de administrador incorrectas")
                         return False
 
-                # Verificar si el participante existe
+                # Verificar credenciales del participante
                 cursor.execute("""
-                    SELECT p.ci, p.nombre, p.apellido, ppa.rol 
+                    SELECT p.ci, p.nombre, p.apellido, ppa.rol, l.contrasena
                     FROM participante p
                     LEFT JOIN participante_programa_academico ppa ON p.ci = ppa.ci_participante
+                    LEFT JOIN login l ON p.ci = l.ci_participante
                     WHERE p.ci = %s
                 """, (ci,))
 
                 usuario = cursor.fetchone()
 
                 if usuario:
-                    self.usuario_actual = usuario['ci']
-                    self.nombre_usuario = f"{usuario['nombre']} {usuario['apellido']}"
-                    self.rol_actual = usuario['rol'] if usuario['rol'] else 'alumno'
-                    return True
+                    # Verificar contraseña
+                    if usuario['contrasena'] and usuario['contrasena'] == self.hash_password(password):
+                        self.usuario_actual = usuario['ci']
+                        self.nombre_usuario = f"{usuario['nombre']} {usuario['apellido']}"
+                        self.rol_actual = usuario['rol'] if usuario['rol'] else 'alumno'
+                        return True
+                    else:
+                        st.error("Contraseña incorrecta")
+                        return False
                 else:
+                    st.error("Usuario no encontrado")
                     return False
 
         except Error as e:
             st.error(f"Error en login: {e}")
+            return False
+        finally:
+            conn.close()
+
+    def cambiar_contrasena(self, ci, nueva_contrasena):
+        """Cambiar contraseña de usuario"""
+        conn = self.get_connection()
+        if not conn:
+            return False
+
+        try:
+            with conn.cursor() as cursor:
+                hashed_password = self.hash_password(nueva_contrasena)
+                sql = "UPDATE login SET contrasena = %s WHERE ci_participante = %s"
+                cursor.execute(sql, (hashed_password, ci))
+                conn.commit()
+                st.success("Contraseña actualizada exitosamente!")
+                return True
+
+        except Error as e:
+            st.error(f"Error al cambiar contraseña: {e}")
             return False
         finally:
             conn.close()
@@ -236,9 +270,75 @@ class SistemaSalas:
         finally:
             conn.close()
 
+    def obtener_programas_academicos(self):
+        """Obtener lista de programas académicos disponibles"""
+        conn = self.get_connection()
+        if not conn:
+            return []
+
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT nombre_programa FROM programa_academico ORDER BY nombre_programa")
+                programas = cursor.fetchall()
+                return [programa['nombre_programa'] for programa in programas]
+        except Error as e:
+            st.error(f"Error: {e}")
+            return []
+        finally:
+            conn.close()
+
+    def obtener_salas_disponibles(self, fecha, id_turno):
+        """Obtener salas disponibles para una fecha y turno específicos"""
+        conn = self.get_connection()
+        if not conn:
+            return []
+
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    SELECT s.nombre_sala, s.edificio, s.capacidad, s.tipo_sala
+                    FROM sala s
+                    WHERE s.nombre_sala NOT IN (
+                        SELECT r.nombre_sala 
+                        FROM reserva r 
+                        WHERE r.fecha = %s AND r.id_turno = %s AND r.estado = 'activa'
+                    )
+                    ORDER BY s.edificio, s.nombre_sala
+                """, (fecha, id_turno))
+                return cursor.fetchall()
+        except Error as e:
+            st.error(f"Error: {e}")
+            return []
+        finally:
+            conn.close()
+
+    def obtener_turnos_disponibles(self, fecha, nombre_sala):
+        """Obtener turnos disponibles para una sala y fecha específicas"""
+        conn = self.get_connection()
+        if not conn:
+            return []
+
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    SELECT t.id_turno, t.hora_inicio, t.hora_fin
+                    FROM turno t
+                    WHERE t.id_turno NOT IN (
+                        SELECT r.id_turno 
+                        FROM reserva r 
+                        WHERE r.nombre_sala = %s AND r.fecha = %s AND r.estado = 'activa'
+                    )
+                    ORDER BY t.hora_inicio
+                """, (nombre_sala, fecha))
+                return cursor.fetchall()
+        except Error as e:
+            st.error(f"Error: {e}")
+            return []
+        finally:
+            conn.close()
     # ========== ABM PARTICIPANTES ==========
-    def alta_participante(self, ci, nombre, apellido, email):
-        """Agregar nuevo participante"""
+    def alta_participante(self, ci, nombre, apellido, email, programa_academico, rol='alumno', password=None):
+        """Agregar nuevo participante con programa académico, rol y contraseña"""
         if not self.puede_gestionar_participantes():
             return
 
@@ -248,15 +348,41 @@ class SistemaSalas:
 
         try:
             with conn.cursor() as cursor:
+                # Verificar si ya existe el participante
                 cursor.execute("SELECT ci FROM participante WHERE ci = %s OR email = %s", (ci, email))
                 if cursor.fetchone():
                     st.error("Error: Ya existe un participante con esa cedula o email")
                     return
 
-                sql = "INSERT INTO participante (ci, nombre, apellido, email) VALUES (%s, %s, %s, %s)"
-                cursor.execute(sql, (ci, nombre, apellido, email))
+                # Verificar que el programa académico existe
+                cursor.execute("SELECT nombre_programa FROM programa_academico WHERE nombre_programa = %s",
+                               (programa_academico,))
+                if not cursor.fetchone():
+                    st.error("Error: El programa académico seleccionado no existe")
+                    return
+
+                # Insertar participante
+                sql_participante = "INSERT INTO participante (ci, nombre, apellido, email) VALUES (%s, %s, %s, %s)"
+                cursor.execute(sql_participante, (ci, nombre, apellido, email))
+
+                # Insertar en login con contraseña por defecto si no se proporciona
+                if not password:
+                    password = ci  # Por defecto, la cédula como contraseña
+
+                hashed_password = self.hash_password(password)
+                sql_login = "INSERT INTO login (correo, contrasena, ci_participante) VALUES (%s, %s, %s)"
+                cursor.execute(sql_login, (email, hashed_password, ci))
+
+                # Asignar programa académico con el rol elegido
+                sql_programa = """
+                INSERT INTO participante_programa_academico (ci_participante, nombre_programa, rol) 
+                VALUES (%s, %s, %s)
+                """
+                cursor.execute(sql_programa, (ci, programa_academico, rol))
+
                 conn.commit()
                 st.success("Participante agregado exitosamente!")
+                st.info(f"Contraseña inicial: {password}")
 
         except Error as e:
             st.error(f"Error: {e}")
@@ -379,9 +505,21 @@ class SistemaSalas:
 
         # Si fecha es date object, convertir a string
         if not isinstance(fecha, str):
-            fecha = fecha.strftime('%Y-%m-%d')
+            fecha_str = fecha.strftime('%Y-%m-%d')
+        else:
+            fecha_str = fecha
 
-        # Validaciones completas
+        # Validar que la fecha no sea en el pasado
+        hoy = datetime.datetime.now().date()
+        if isinstance(fecha, str):
+            fecha_date = datetime.datetime.strptime(fecha_str, '%Y-%m-%d').date()
+        else:
+            fecha_date = fecha
+
+        if fecha_date < hoy:
+            st.error("Error: No se pueden hacer reservas en fechas pasadas")
+            return
+
         conn = self.get_connection()
         if not conn:
             return
@@ -392,13 +530,13 @@ class SistemaSalas:
                 cursor.execute("""
                     SELECT * FROM reserva 
                     WHERE nombre_sala = %s AND fecha = %s AND id_turno = %s AND estado = 'activa'
-                """, (nombre_sala, fecha, id_turno))
+                """, (nombre_sala, fecha_str, id_turno))
 
                 if cursor.fetchone():
                     st.error("La sala ya esta reservada en ese horario")
                     return
 
-                # 2. Obtener informacion de la sala (CORREGIDO)
+                # 2. Obtener informacion de la sala
                 cursor.execute("SELECT capacidad, tipo_sala, edificio FROM sala WHERE nombre_sala = %s", (nombre_sala,))
                 sala_info = cursor.fetchone()
                 if not sala_info:
@@ -426,11 +564,11 @@ class SistemaSalas:
 
                 if usuario_info and usuario_info['rol'] == 'alumno' and usuario_info['tipo'] == 'grado' and sala_info[
                     'tipo_sala'] == 'libre':
-                    if not self.verificar_limite_horas(ci_participante, fecha, id_turno):
+                    if not self.verificar_limite_horas(ci_participante, fecha_str, id_turno):
                         st.error("El usuario ya tiene 2 horas reservadas hoy")
                         return
 
-                    if not self.verificar_limite_semanal(ci_participante, fecha):
+                    if not self.verificar_limite_semanal(ci_participante, fecha_str):
                         st.error("El usuario ya tiene 3 reservas activas esta semana")
                         return
 
@@ -442,10 +580,10 @@ class SistemaSalas:
                 INSERT INTO reserva (nombre_sala, edificio, fecha, id_turno, estado) 
                 VALUES (%s, %s, %s, %s, 'activa')
                 """
-                cursor.execute(sql, (nombre_sala, edificio_info, fecha, id_turno))
+                cursor.execute(sql, (nombre_sala, edificio_info, fecha_str, id_turno))
                 id_reserva = cursor.lastrowid
 
-                # Agregar participante a la reserva
+                # Agregar participante a la reserva (SOLO EL QUE HACE LA RESERVA)
                 sql_participante = """
                 INSERT INTO reserva_participante (ci_participante, id_reserva) 
                 VALUES (%s, %s)
@@ -475,6 +613,165 @@ class SistemaSalas:
                 cursor.execute(sql, (id_reserva,))
                 conn.commit()
                 st.success("Reserva cancelada exitosamente!")
+
+        except Error as e:
+            st.error(f"Error: {e}")
+        finally:
+            conn.close()
+
+    # ========== NUEVAS FUNCIONALIDADES ==========
+    def registrar_asistencia(self, id_reserva, ci_participante):
+        """Registrar asistencia a una reserva (solo para el que hizo la reserva)"""
+        if not self.puede_gestionar_reservas():
+            return
+
+        conn = self.get_connection()
+        if not conn:
+            return
+
+        try:
+            with conn.cursor() as cursor:
+                # Verificar que la reserva existe y es del día actual
+                cursor.execute("""
+                    SELECT r.*, rp.ci_participante 
+                    FROM reserva r
+                    JOIN reserva_participante rp ON r.id_reserva = rp.id_reserva
+                    WHERE r.id_reserva = %s AND rp.ci_participante = %s 
+                    AND r.estado = 'activa'
+                """, (id_reserva, ci_participante))
+
+                reserva = cursor.fetchone()
+
+                if not reserva:
+                    st.error("Reserva no encontrada o no tiene permisos")
+                    return
+
+                # Verificar que la fecha de la reserva es hoy
+                hoy = datetime.datetime.now().date()
+                if reserva['fecha'] != hoy:
+                    st.error("Solo se puede registrar asistencia para reservas del día de hoy")
+                    return
+
+                # Actualizar asistencia
+                sql = """
+                UPDATE reserva_participante 
+                SET asistencia = TRUE 
+                WHERE id_reserva = %s AND ci_participante = %s
+                """
+                cursor.execute(sql, (id_reserva, ci_participante))
+
+                # Cambiar estado de la reserva a finalizada
+                cursor.execute("UPDATE reserva SET estado = 'finalizada' WHERE id_reserva = %s", (id_reserva,))
+
+                conn.commit()
+                st.success("Asistencia registrada exitosamente!")
+
+        except Error as e:
+            st.error(f"Error: {e}")
+        finally:
+            conn.close()
+
+    def verificar_reservas_sin_asistencia(self):
+        """Verificar reservas sin asistencia y aplicar sanciones automáticamente"""
+        if not self.puede_gestionar_sanciones():
+            return
+
+        conn = self.get_connection()
+        if not conn:
+            return
+
+        try:
+            with conn.cursor() as cursor:
+                # Buscar reservas pasadas sin asistencia registrada
+                cursor.execute("""
+                    SELECT DISTINCT r.id_reserva, r.fecha, rp.ci_participante
+                    FROM reserva r
+                    JOIN reserva_participante rp ON r.id_reserva = rp.id_reserva
+                    WHERE r.fecha < CURDATE() 
+                    AND r.estado = 'activa'
+                    AND (rp.asistencia IS NULL OR rp.asistencia = FALSE)
+                """)
+
+                reservas_sin_asistencia = cursor.fetchall()
+                sanciones_aplicadas = 0
+
+                for reserva in reservas_sin_asistencia:
+                    # Verificar si ya tiene sanción activa
+                    cursor.execute("""
+                        SELECT * FROM sancion_participante 
+                        WHERE ci_participante = %s AND fecha_fin >= CURDATE()
+                    """, (reserva['ci_participante'],))
+
+                    if not cursor.fetchone():
+                        # Aplicar sanción de 2 meses
+                        fecha_inicio = datetime.datetime.now().date()
+                        fecha_fin = fecha_inicio + datetime.timedelta(days=60)
+
+                        cursor.execute("""
+                            INSERT INTO sancion_participante (ci_participante, fecha_inicio, fecha_fin) 
+                            VALUES (%s, %s, %s)
+                        """, (reserva['ci_participante'], fecha_inicio, fecha_fin))
+                        sanciones_aplicadas += 1
+
+                    # Cambiar estado de la reserva
+                    cursor.execute("UPDATE reserva SET estado = 'sin_asistencia' WHERE id_reserva = %s",
+                                   (reserva['id_reserva'],))
+
+                conn.commit()
+
+                if sanciones_aplicadas > 0:
+                    st.info(f"Se aplicaron {sanciones_aplicadas} sanciones por reservas sin asistencia")
+                else:
+                    st.info("No hay reservas pendientes de sanción")
+
+        except Error as e:
+            st.error(f"Error: {e}")
+        finally:
+            conn.close()
+
+    def listar_mis_reservas(self):
+        """Listar reservas del usuario actual"""
+        if not self.usuario_actual or self.rol_actual == 'admin':
+            st.info("Esta función es para usuarios regulares")
+            return
+
+        conn = self.get_connection()
+        if not conn:
+            return
+
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    SELECT r.id_reserva, r.nombre_sala, r.edificio, r.fecha, 
+                           t.hora_inicio, t.hora_fin, r.estado,
+                           (SELECT COUNT(*) FROM reserva_participante rp2 WHERE rp2.id_reserva = r.id_reserva) as total_participantes,
+                           rp.asistencia
+                    FROM reserva r
+                    JOIN turno t ON r.id_turno = t.id_turno
+                    JOIN reserva_participante rp ON r.id_reserva = rp.id_reserva
+                    WHERE rp.ci_participante = %s
+                    ORDER BY r.fecha DESC, t.hora_inicio
+                """, (self.usuario_actual,))
+
+                reservas = cursor.fetchall()
+
+                st.subheader("MIS RESERVAS")
+                if not reservas:
+                    st.info("No tienes reservas activas")
+                    return
+
+                for reserva in reservas:
+                    estado_color = "🟢" if reserva['estado'] == 'activa' else "🔴" if reserva[
+                                                                                        'estado'] == 'cancelada' else "🟡"
+                    asistencia_text = "✅ Asistió" if reserva['asistencia'] else "❌ No asistió" if reserva[
+                                                                                                      'asistencia'] is False else "⏳ Pendiente"
+
+                    st.write(f"{estado_color} **Reserva #{reserva['id_reserva']}**")
+                    st.write(f"**Sala:** {reserva['nombre_sala']} ({reserva['edificio']})")
+                    st.write(f"**Fecha:** {reserva['fecha']} {reserva['hora_inicio']}-{reserva['hora_fin']}")
+                    st.write(f"**Estado:** {reserva['estado']} | **Asistencia:** {asistencia_text}")
+                    st.write(f"**Total participantes:** {reserva['total_participantes']}")
+                    st.write("---")
 
         except Error as e:
             st.error(f"Error: {e}")
@@ -999,19 +1296,36 @@ def main_streamlit():
         if not sistema.usuario_actual:
             with st.form("login_form"):
                 ci = st.text_input("Cedula de Identidad (o 'admin' para administrador)")
+                password = st.text_input("Contraseña", type="password")
 
                 if st.form_submit_button("Ingresar al Sistema"):
-                    if sistema.login(ci):
-                        st.success(f"Bienvenido/a {sistema.nombre_usuario}!")
-                        st.rerun()
+                    if ci and password:
+                        if sistema.login(ci, password):
+                            st.success(f"Bienvenido/a {sistema.nombre_usuario}!")
+                            st.rerun()
+                        # else: los errores se muestran en el método login
                     else:
-                        st.error("Credenciales no validas")
+                        st.error("Por favor complete todos los campos")
         else:
-            # Usuario logueado - mostrar informacion y opcion de logout
+            # Usuario logueado - mostrar informacion y opciones
             st.success(f"Conectado como: {sistema.nombre_usuario}")
             st.info(f"Rol: {sistema.rol_actual}")
             if sistema.rol_actual != 'admin':
                 st.info(f"CI: {sistema.usuario_actual}")
+
+            # Opción para cambiar contraseña (solo para usuarios normales)
+            if sistema.rol_actual != 'admin':
+                with st.expander("Cambiar Contraseña"):
+                    with st.form("cambiar_contrasena"):
+                        nueva_contrasena = st.text_input("Nueva Contraseña", type="password")
+                        confirmar_contrasena = st.text_input("Confirmar Contraseña", type="password")
+
+                        if st.form_submit_button("Cambiar Contraseña"):
+                            if nueva_contrasena == confirmar_contrasena:
+                                if sistema.cambiar_contrasena(sistema.usuario_actual, nueva_contrasena):
+                                    st.success("Contraseña cambiada exitosamente")
+                            else:
+                                st.error("Las contraseñas no coinciden")
 
             if st.button("Cerrar Sesion"):
                 sistema.logout()
@@ -1027,8 +1341,8 @@ def main_streamlit():
 
     # Verificar si el usuario esta logueado antes de mostrar el menu principal
     if not sistema.usuario_actual:
-        st.warning("Por favor, ingrese con su cedula en el sidebar para acceder al sistema")
-        st.info("Use 'admin' como usuario para acceder como administrador")
+        st.warning("🔐 Por favor, inicie sesión en el panel lateral para acceder al sistema")
+        st.info("💡 Si no tiene credenciales de acceso, contacte al administrador del sistema")
         return
 
     # Menu principal (solo visible si esta logueado)
@@ -1072,13 +1386,20 @@ def main_streamlit():
         if opcion == "Alta de participante":
             with st.form("alta_participante"):
                 st.subheader("Alta de Participante")
-                ci = st.text_input("Cedula")
+                ci = st.text_input("Cédula")
                 nombre = st.text_input("Nombre")
                 apellido = st.text_input("Apellido")
                 email = st.text_input("Email")
 
+                # Obtener programas académicos disponibles
+                programas = sistema.obtener_programas_academicos()
+                programa_academico = st.selectbox("Programa Académico", programas)
+
+                rol = st.selectbox("Rol", ["alumno", "docente"])
+                password = st.text_input("Contraseña (opcional - por defecto será la cédula)", type="password")
+
                 if st.form_submit_button("Agregar Participante"):
-                    sistema.alta_participante(ci, nombre, apellido, email)
+                    sistema.alta_participante(ci, nombre, apellido, email, programa_academico, rol, password)
 
         elif opcion == "Baja de participante":
             with st.form("baja_participante"):
@@ -1140,14 +1461,44 @@ def main_streamlit():
     elif menu == "Gestion de Reservas":
         st.header("Gestion de Reservas")
 
-        col1, col2 = st.columns(2)
+        opcion_reservas = st.selectbox("Operaciones de Reservas", [
+            "Nueva reserva",
+            "Cancelar reserva",
+            "Registrar asistencia",
+            "Ver mis reservas",
+            "Ver salas disponibles",
+            "Ver turnos disponibles"
+        ])
 
-        with col1:
-            st.subheader("Nueva Reserva")
+        if opcion_reservas == "Nueva reserva":
             with st.form("nueva_reserva"):
-                nombre_sala = st.text_input("Nombre de la sala")
-                fecha = st.date_input("Fecha")
-                id_turno = st.number_input("ID del turno", min_value=1, value=1)
+                st.subheader("Nueva Reserva")
+
+                # Fecha primero
+                fecha = st.date_input("Fecha", min_value=datetime.datetime.now().date())
+
+                # Mostrar todas las salas inicialmente
+                st.write("**Seleccione una sala:**")
+                sistema.listar_salas()
+
+                nombre_sala = st.text_input("Nombre de la sala que desea reservar")
+
+                # Si se ingresó una sala, mostrar turnos disponibles
+                if nombre_sala and fecha:
+                    turnos_disponibles = sistema.obtener_turnos_disponibles(fecha, nombre_sala)
+
+                    if turnos_disponibles:
+                        st.write("**Turnos disponibles para esta sala y fecha:**")
+                        for turno in turnos_disponibles:
+                            st.write(f"ID: {turno['id_turno']} - {turno['hora_inicio']} a {turno['hora_fin']}")
+
+                        id_turno = st.number_input("ID del turno deseado", min_value=1, value=1)
+                    else:
+                        st.warning("No hay turnos disponibles para esta sala en la fecha seleccionada")
+                        id_turno = None
+                else:
+                    id_turno = st.number_input("ID del turno", min_value=1, value=1)
+
                 # Para alumnos y docentes, usar su propia cedula automaticamente
                 if sistema.rol_actual in ['alumno', 'docente']:
                     ci_participante = sistema.usuario_actual
@@ -1156,33 +1507,61 @@ def main_streamlit():
                     ci_participante = st.text_input("CI del participante")
 
                 if st.form_submit_button("Hacer Reserva"):
-                    sistema.hacer_reserva(nombre_sala, fecha, id_turno, ci_participante)
+                    if nombre_sala and fecha and id_turno and ci_participante:
+                        sistema.hacer_reserva(nombre_sala, fecha, id_turno, ci_participante)
+                    else:
+                        st.error("Por favor complete todos los campos")
 
-        with col2:
-            st.subheader("Cancelar Reserva")
+        elif opcion_reservas == "Cancelar reserva":
             with st.form("cancelar_reserva"):
+                st.subheader("Cancelar Reserva")
                 id_reserva = st.number_input("ID de la reserva a cancelar", min_value=1)
 
                 if st.form_submit_button("Cancelar Reserva"):
                     sistema.cancelar_reserva(id_reserva)
 
-            if st.button("Ver Turnos Disponibles"):
-                sistema.listar_turnos()
+        elif opcion_reservas == "Registrar asistencia":
+            with st.form("registrar_asistencia"):
+                st.subheader("Registrar Asistencia")
+                id_reserva = st.number_input("ID de la reserva", min_value=1)
 
-            if st.button("Ver Salas Disponibles"):
-                sistema.listar_salas()
+                if sistema.rol_actual in ['alumno', 'docente']:
+                    ci_participante = sistema.usuario_actual
+                    st.info(f"Registrando asistencia para: {ci_participante}")
+                else:
+                    ci_participante = st.text_input("Cédula del participante")
+
+                if st.form_submit_button("Registrar Asistencia"):
+                    sistema.registrar_asistencia(id_reserva, ci_participante)
+
+        elif opcion_reservas == "Ver mis reservas":
+            sistema.listar_mis_reservas()
+
+        elif opcion_reservas == "Ver salas disponibles":
+            sistema.listar_salas()
+
+        elif opcion_reservas == "Ver turnos disponibles":
+            sistema.listar_turnos()
 
     # GESTION DE SANCIONES
     elif menu == "Gestion de Sanciones":
         st.header("Gestion de Sanciones")
 
-        with st.form("aplicar_sancion"):
-            st.subheader("Aplicar Sancion")
-            ci_participante = st.text_input("Cedula del participante")
-            fecha_inicio = st.date_input("Fecha inicio")
+        col1, col2 = st.columns(2)
 
-            if st.form_submit_button("Aplicar Sancion"):
-                sistema.aplicar_sancion(ci_participante, fecha_inicio)
+        with col1:
+            with st.form("aplicar_sancion"):
+                st.subheader("Aplicar Sancion")
+                ci_participante = st.text_input("Cedula del participante")
+                fecha_inicio = st.date_input("Fecha inicio", min_value=datetime.datetime.now().date())
+
+                if st.form_submit_button("Aplicar Sancion"):
+                    sistema.aplicar_sancion(ci_participante, fecha_inicio)
+
+        with col2:
+            st.subheader("Sanciones Automaticas")
+            if st.button("Verificar Reservas Sin Asistencia"):
+                sistema.verificar_reservas_sin_asistencia()
 
     # REPORTES Y CONSULTAS
     elif menu == "Reportes y Consultas":
