@@ -66,9 +66,6 @@ pip install streamlit pymysql
 #### Ejecutar Script SQL Manualmente
 
 
-#### Opción B: Configuración Automática
-El sistema detectará automáticamente si la base de datos necesita inicialización.
-
 ### 4. Configurar Conexión a BD
 Editar las credenciales en el archivo principal (en la clase SistemaSalas, método __init__):
 self.host = 'localhost'
