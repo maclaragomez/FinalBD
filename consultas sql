@@ -1,0 +1,96 @@
+#Salas mas reservadas
+SELECT r.nombre_sala, r.edificio, COUNT(*) as total_reservas
+FROM reserva r
+WHERE r.estado = 'activa'
+GROUP BY r.nombre_sala, r.edificio
+ORDER BY total_reservas DESC
+LIMIT 10;
+
+# turnos mas demandados
+SELECT t.id_turno, t.hora_inicio, t.hora_fin, COUNT(r.id_reserva) as total_reservas
+FROM turno t
+LEFT JOIN reserva r ON t.id_turno = r.id_turno
+GROUP BY t.id_turno, t.hora_inicio, t.hora_fin
+ORDER BY total_reservas DESC;
+
+#promedio participantes por sala
+SELECT s.nombre_sala, s.edificio, COALESCE(AVG(participantes_count), 0) as promedio_participantes
+FROM sala s
+LEFT JOIN (SELECT r.id_reserva, r.nombre_sala, r.edificio, COUNT(rp.ci_participante) as participantes_count
+    FROM reserva r
+    JOIN reserva_participante rp ON r.id_reserva = rp.id_reserva
+    GROUP BY r.id_reserva, r.nombre_sala, r.edificio
+) AS reservas ON s.nombre_sala = reservas.nombre_sala AND s.edificio = reservas.edificio
+GROUP BY s.nombre_sala, s.edificio;
+
+
+
+#reservas por carrera y facultad
+SELECT pa.nombre_programa, f.nombre as facultad, COUNT(rp.id_reserva) as total_reservas
+FROM programa_academico pa
+JOIN facultad f ON pa.id_facultad = f.id_facultad
+JOIN participante_programa_academico ppa ON pa.nombre_programa = ppa.nombre_programa
+JOIN reserva_participante rp ON ppa.ci_participante = rp.ci_participante
+GROUP BY pa.nombre_programa, f.nombre
+ORDER BY total_reservas DESC;
+
+
+#porcentaje de ocupacion por edificio
+SELECT e.nombre_edificio, COUNT(r.id_reserva) as reservas_totales, (SELECT COUNT(*) FROM turno) * (SELECT COUNT(*) FROM sala WHERE sala.edificio = e.nombre_edificio) as turnos_posibles, ROUND((COUNT(r.id_reserva)/((SELECT COUNT(*) FROM turno)*(SELECT COUNT(*) FROM sala WHERE sala.edificio = e.nombre_edificio))) * 100, 2) as porcentaje_ocupacion
+FROM edificio e
+LEFT JOIN sala s ON e.nombre_edificio = s.edificio
+LEFT JOIN reserva r ON s.nombre_sala = r.nombre_sala
+GROUP BY e.nombre_edificio;
+
+
+
+#reservas y asistencias por tipo de usuario
+SELECT ppa.rol, pa.tipo, COUNT(rp.id_reserva) as total_reservas, SUM(CASE WHEN rp.asistencia = TRUE THEN 1 ELSE 0 END) as asistencias
+FROM participante_programa_academico ppa
+JOIN programa_academico pa ON ppa.nombre_programa = pa.nombre_programa
+JOIN reserva_participante rp ON ppa.ci_participante = rp.ci_participante
+GROUP BY ppa.rol, pa.tipo;
+
+#sanciones por tipo de usuario
+SELECT ppa.rol, pa.tipo, COUNT(sp.ci_participante) as total_sanciones
+FROM participante_programa_academico ppa
+JOIN programa_academico pa ON ppa.nombre_programa = pa.nombre_programa
+JOIN sancion_participante sp ON ppa.ci_participante = sp.ci_participante
+GROUP BY ppa.rol, pa.tipo;
+
+
+
+#porcentaje de uso de reservas
+SELECT estado, COUNT(*) as cantidad, ROUND((COUNT(*) / (SELECT COUNT(*) FROM reserva)) * 100, 2) as porcentaje
+FROM reserva
+GROUP BY estado;
+
+
+#participantes mas activos
+SELECT p.ci, p.nombre, p.apellido, COUNT(rp.id_reserva) as reservas_activas
+FROM participante p
+JOIN reserva_participante rp ON p.ci = rp.ci_participante
+JOIN reserva r ON rp.id_reserva = r.id_reserva
+WHERE r.estado = 'activa'
+GROUP BY p.ci, p.nombre, p.apellido
+ORDER BY reservas_activas DESC
+LIMIT 10;
+
+
+#salas sin uso
+SELECT s.nombre_sala, s.edificio, s.tipo_sala
+FROM sala s
+LEFT JOIN reserva r ON s.nombre_sala = r.nombre_sala
+WHERE r.id_reserva IS NULL
+ORDER BY s.edificio, s.nombre_sala;
+
+
+
+
+#horarios pico
+SELECT t.hora_inicio, t.hora_fin, DAYNAME(r.fecha) as dia, COUNT(*) as total_reservas
+FROM reserva r
+JOIN turno t ON r.id_turno = t.id_turno
+GROUP BY t.hora_inicio, t.hora_fin, DAYNAME(r.fecha)
+ORDER BY total_reservas DESC
+LIMIT 10;
